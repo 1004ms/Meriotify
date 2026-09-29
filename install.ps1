@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -32,13 +32,26 @@ function Test-IsAdmin {
 }
 
 function Get-Architecture {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
-    switch ($arch) {
-        'x64'   { return 'x64' }
-        'arm64' { return 'arm64' }
-        'x86'   { return 'x32' }
-        default { Fail "Unsupported architecture: $arch" }
+    # PowerShell 5.1 may not expose RuntimeInformation.OSArchitecture reliably.
+    # Prefer Windows environment variables, which work on older .NET Framework builds too.
+    $arch = $env:PROCESSOR_ARCHITEW6432
+    if (-not $arch) {
+        $arch = $env:PROCESSOR_ARCHITECTURE
     }
+
+    if ($arch) {
+        switch ($arch.ToUpperInvariant()) {
+            'AMD64' { return 'x64' }
+            'ARM64' { return 'arm64' }
+            'X86'   { return 'x32' }
+        }
+    }
+
+    # Final fallback for unusual environments.
+    if ([Environment]::Is64BitOperatingSystem) {
+        return 'x64'
+    }
+    return 'x32'
 }
 
 function Get-Version {
