@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-ini/ini"
 	"github.com/1004ms/Meriotify/src/utils"
+	"github.com/go-ini/ini"
 )
 
 var (

@@ -12,11 +12,11 @@ import (
 	"strings"
 	"sync"
 
-	colorable "github.com/mattn/go-colorable"
 	"github.com/1004ms/Meriotify/src/cmd"
 	spotifystatus "github.com/1004ms/Meriotify/src/status/spotify"
 	"github.com/1004ms/Meriotify/src/utils"
 	"github.com/1004ms/Meriotify/src/utils/isAdmin"
+	colorable "github.com/mattn/go-colorable"
 	"github.com/pterm/pterm"
 )
 

@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/go-ini/ini"
 	"github.com/1004ms/Meriotify/src/utils"
+	"github.com/go-ini/ini"
 )
 
 // EditConfig changes one or multiple config value
