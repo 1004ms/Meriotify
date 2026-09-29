@@ -1,0 +1,19 @@
+# Executables
+bin
+cli
+spicetify
+spicetify-cli
+*.exe
+
+# MacOS
+.DS_Store
+
+# Node.js
+node_modules
+
+# Generated wrapper bundle
+jsHelper/spicetifyWrapper.js
+jsHelper/spicetifyWrapper.js.map
+
+# Logs
+install.log
