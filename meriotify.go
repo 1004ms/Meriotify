@@ -6,14 +6,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/1004ms/Meriotify/src/cmd"
-	spotifystatus "github.com/1004ms/Meriotify/src/status/spotify"
 	"github.com/1004ms/Meriotify/src/utils"
 	"github.com/1004ms/Meriotify/src/utils/isAdmin"
 	colorable "github.com/mattn/go-colorable"
@@ -286,43 +283,20 @@ func main() {
 
 	utils.PrintBrand(version)
 	if slices.Contains(commands, "upgrade") || slices.Contains(commands, "update") {
-		updateStatus := cmd.Update(version)
-		spotifyPath := filepath.Join(cmd.GetSpotifyPath(), "Apps")
-		ex, err := os.Executable()
-		if err != nil {
-			ex = "meriotify"
-		}
-
-		if updateStatus {
-			spotStat := spotifystatus.Get(spotifyPath)
-			cmds := []string{"backup", "apply"}
-			if !spotStat.IsBackupable() {
-				cmds = append([]string{"restore"}, cmds...)
-			}
-
-			cmd := exec.Command(ex, cmds...)
-			utils.CmdScanner(cmd)
-
-			cmd = exec.Command(ex, strings.Join(commands[:], " "))
-			utils.CmdScanner(cmd)
-		}
-
-		spotStat := spotifystatus.Get(spotifyPath)
-		if spotStat.IsBackupable() {
-			utils.PrintNote("Meriotify is up-to-date! If you ran this because Meriotify disappeared after Spotify updated, we'll attempt to fix it for you right now.")
-			cmd.Backup(version, upstreamVersion, true)
-			cmd.CheckStates()
-			cmd.InitSetting()
-			cmd.Apply(version)
-			if !noRestart {
-				cmd.SpotifyRestart()
+		if cmd.Update(version) {
+			ex, err := os.Executable()
+			if err == nil {
+				refresh := exec.Command(ex, "-q", "setup")
+				if refresh.Run() == nil {
+					utils.PrintSuccess("Spotify refreshed")
+				} else {
+					utils.PrintWarning("Spotify refresh failed")
+				}
 			}
 		}
-
 		return
-	} else {
-		cmd.CheckUpdate(version)
 	}
+	cmd.CheckUpdate(version)
 
 	var shouldRestart bool = false
 	// Chainable commands
@@ -387,54 +361,11 @@ Run "meriotify -h" for a list of valid commands.`))
 func help() {
 	utils.PrintBrand(version)
 	log.Println(`
-USAGE
-  meriotify <command> [options]
-  meriotify setup
+COMMANDS
+  meriotify update      Update Meriotify
+  meriotify --version   Show installed version
 
-QUICK START
-  setup, init         Set up Meriotify on Spotify in one command
-  update              Update Meriotify and repair the current Spotify install
-  restore             Return Spotify to its original state
-
-CUSTOMIZE
-  apply               Apply the current theme, extensions and apps
-  refresh             Refresh the active customization without rebuilding everything
-  config              View or change Meriotify settings
-  color               View or change the active theme colors
-  enable-devtools     Enable Spotify developer tools
-
-TOOLS
-  backup              Create and preprocess a fresh Spotify backup
-  clear               Remove the current backup
-  restart             Restart Spotify
-  watch               Watch local customization files and refresh on change
-  path                Print Meriotify, Spotify or customization paths
-  config-dir          Open the Meriotify data folder
-  spotify-updates     Block or unblock Spotify client updates
-
-FOCUS OPTIONS
-  -s, --style         Theme
-  -e, --extension     Extensions
-  -a, --app           Custom apps
-  -l, --live-refresh  All customization files
-
-GENERAL OPTIONS
-  -q, --quiet         Reduce output
-  -n, --no-restart    Do not restart Spotify after applying changes
-  -c, --config        Print the config file path
-  -v, --version       Print Meriotify version
-  -h, --help          Show this help
-  --compat-version    Print the compatibility baseline
-  --bypass-admin      Bypass the admin/root safety check (not recommended)
-
-EXAMPLES
-  meriotify setup
-  meriotify config current_theme MeriotifyDefault
-  meriotify apply
-  meriotify -e refresh
-  meriotify config-dir
-
-Config reference: meriotify -h config
+Install and uninstall are handled by the official PowerShell commands on GitHub.
 Project: https://github.com/1004ms/Meriotify`)
 }
 

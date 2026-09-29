@@ -1,23 +1,24 @@
 # Meriotify changes
 
+## 1.1.2
+
+- Cleaner install, update and uninstall flow.
+- Fixed reinstalling over an already customized Spotify install.
+- Fixed stale update notifications.
+- Cleaner Windows terminal output.
+- Installer now runs the full Meriotify + Marketplace setup automatically.
+
+## 1.1.1
+
+- Fixed Windows PowerShell 5.1 installer encoding.
+
 ## 1.1.0
 
-- New bilingual Windows installer with Italian and English selection.
-- New complete-install mode: CLI, Marketplace and Spotify setup in one flow.
-- Marketplace is installed directly through Meriotify instead of invoking the legacy CLI installer.
-- Installer and uninstaller are attached to every GitHub release.
-- Added `meriotify init` as an alias for `meriotify setup`.
-- Cleaner command help and terminal status prefixes.
-- New Meriotify dark/magenta default color scheme for fresh installs.
-- Preprocessing avoids redundant per-file stat calls while patching Spotify assets.
-- Public update setting renamed to `check_meriotify_update`; existing configs migrate automatically.
-- README and release-facing copy rewritten around Meriotify instead of the fork history.
+- Added Italian and English installer languages.
+- Added Marketplace to the main installer.
+- Added the Meriotify default theme.
+- Added release installer and uninstaller scripts.
 
 ## 1.0.0
 
-- First public Meriotify release.
-- Dedicated Meriotify command and data directory.
-- Separate Meriotify version and compatibility baseline.
-- `meriotify setup` for first-run backup, preprocessing and apply.
-- Cached release checks and lean release binaries.
-- Safer unzip/copy paths and file-handle cleanup.
+- First Meriotify release.

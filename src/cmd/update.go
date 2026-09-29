@@ -16,16 +16,14 @@ import (
 func Update(currentVersion string) bool {
 	tagName, err := utils.FetchLatestTag()
 	if err != nil {
-		utils.PrintError("Cannot fetch latest Meriotify release info")
-		utils.PrintError(err.Error())
+		utils.PrintError("Update check failed")
 		return false
 	}
-	if currentVersion == tagName {
-		utils.PrintSuccess("Meriotify is up-to-date.")
+	if !isVersionNewer(tagName, currentVersion) {
+		utils.PrintSuccess("Already up to date")
 		return false
 	}
 
-	utils.PrintInfo("Latest release: " + tagName)
 	repository := utils.GetMeriotifyRepository()
 	assetURL := "https://github.com/" + repository + "/releases/download/v" + tagName + "/meriotify-" + tagName + "-" + runtime.GOOS + "-"
 	location := filepath.Join(os.TempDir(), "meriotify-"+tagName)
@@ -48,11 +46,11 @@ func Update(currentVersion string) bool {
 		location += ".tar.gz"
 	}
 
-	spinner, _ := utils.Spinner.Start("Downloading Meriotify")
+	spinner, _ := utils.Spinner.Start("Updating Meriotify")
 
 	out, err := os.Create(location)
 	if err != nil {
-		spinner.Fail("Failed to download Meriotify")
+		spinner.Fail("Update failed")
 		utils.Fatal(err)
 	}
 
@@ -60,14 +58,14 @@ func Update(currentVersion string) bool {
 	resp, err := client.Get(assetURL)
 	if err != nil {
 		out.Close()
-		spinner.Fail("Failed to download Meriotify")
+		spinner.Fail("Update failed")
 		utils.Fatal(err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		out.Close()
-		spinner.Fail("Failed to download Meriotify")
+		spinner.Fail("Update failed")
 		utils.Fatal(fmt.Errorf("unexpected HTTP status: %s for %s", resp.Status, assetURL))
 	}
 
@@ -76,17 +74,17 @@ func Update(currentVersion string) bool {
 	closeBodyErr := resp.Body.Close()
 	closeFileErr := out.Close()
 	if copyErr != nil {
-		spinner.Fail("Failed to download Meriotify")
+		spinner.Fail("Update failed")
 		utils.Fatal(copyErr)
 	}
 	if closeBodyErr != nil || closeFileErr != nil {
-		spinner.Fail("Failed to finalize Meriotify download")
+		spinner.Fail("Update failed")
 		if closeFileErr != nil {
 			utils.Fatal(closeFileErr)
 		}
 		utils.Fatal(closeBodyErr)
 	}
-	spinner.Success("Downloaded Meriotify")
+	spinner.Success("Download complete")
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -116,12 +114,11 @@ func Update(currentVersion string) bool {
 
 	utils.CheckExistAndDelete(location)
 	utils.CheckExistAndDelete(exeOld)
-	utils.PrintSuccess("Successfully updated Meriotify to v" + tagName)
+	utils.PrintSuccess("Updated to v" + tagName)
 	return true
 }
 
 func permissionError(err error) {
-	utils.PrintInfo("If fatal error is \"Permission denied\", check read/write permission of the Meriotify executable directory.")
-	utils.PrintInfo("If you installed Meriotify through a package manager, upgrade it using the same package manager.")
-	utils.Fatal(err)
+	utils.PrintError("Update failed: " + err.Error())
+	os.Exit(1)
 }

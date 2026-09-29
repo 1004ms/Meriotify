@@ -11,13 +11,13 @@ import (
 var (
 	Info = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "›",
+			Text:  ">",
 			Style: &pterm.Style{pterm.FgBlue},
 		},
 	}
 	Success = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "✓",
+			Text:  "OK",
 			Style: &pterm.Style{pterm.FgGreen},
 		},
 	}
@@ -29,13 +29,13 @@ var (
 	}
 	Error = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "×",
+			Text:  "X",
 			Style: &pterm.Style{pterm.FgRed},
 		},
 	}
 	Note = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "•",
+			Text:  "-",
 			Style: &pterm.Style{pterm.FgYellow},
 		},
 	}
@@ -81,7 +81,7 @@ func Magenta(text string) string {
 
 // PrintBrand prints the compact Meriotify CLI signature.
 func PrintBrand(version string) {
-	log.Println(Magenta("◆ MERIOTIFY") + " v" + version)
+	log.Println(Magenta("MERIOTIFY") + " v" + version)
 }
 
 // PrintNote prints a warning message

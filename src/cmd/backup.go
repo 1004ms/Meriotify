@@ -26,14 +26,17 @@ Modded Spotify cannot be launched using original Shortcut/Start menu tile. To co
 	backupVersion := backupSection.Key("version").MustString("")
 	backStat := backupstatus.Get(prefsPath, backupFolder, backupVersion)
 	if !backStat.IsEmpty() {
-		utils.PrintInfo("A backup is available")
+		// setup/apply chains should reuse a valid backup instead of failing when
+		// Spotify is already patched. This makes setup safe to run repeatedly.
+		if silent && backStat.IsBackuped() {
+			return
+		}
 
 		spotStat := spotifystatus.Get(appPath)
 		if spotStat.IsBackupable() {
 			clearBackup()
 		} else {
-			utils.PrintWarning(`After clearing backup, Spotify cannot be backed up again`)
-			utils.PrintInfo(`Please restore first then backup, run "meriotify restore backup" or re-install Spotify then run "meriotify backup"`)
+			utils.PrintError("Spotify needs a clean install before a new backup can be created")
 			os.Exit(1)
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -317,9 +318,40 @@ func CheckUpdate(version string) {
 }
 
 func notifyUpdate(latestTag, currentVersion string) {
-	if latestTag == "" || latestTag == currentVersion {
+	if !isVersionNewer(latestTag, currentVersion) {
 		return
 	}
-	utils.PrintInfo("New version available: v" + latestTag + " (currently on: v" + currentVersion + ")")
-	utils.PrintInfo(`Run "meriotify update" or use a package manager to update Meriotify`)
+	utils.PrintInfo("Update available: v" + latestTag)
+}
+
+func isVersionNewer(latest, current string) bool {
+	parse := func(v string) ([3]int, bool) {
+		var out [3]int
+		v = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(v), "v"), "V")
+		v = strings.SplitN(v, "-", 2)[0]
+		parts := strings.Split(v, ".")
+		if len(parts) != 3 {
+			return out, false
+		}
+		for i, part := range parts {
+			n, err := strconv.Atoi(part)
+			if err != nil {
+				return out, false
+			}
+			out[i] = n
+		}
+		return out, true
+	}
+
+	l, okL := parse(latest)
+	c, okC := parse(current)
+	if !okL || !okC {
+		return false
+	}
+	for i := 0; i < len(l); i++ {
+		if l[i] != c[i] {
+			return l[i] > c[i]
+		}
+	}
+	return false
 }
