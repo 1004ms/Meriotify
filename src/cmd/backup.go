@@ -94,8 +94,7 @@ Modded Spotify cannot be launched using original Shortcut/Start menu tile. To co
 		utils.PrintSuccess("Spotify optimization complete")
 	}
 
-	err = utils.Copy(rawFolder, themedFolder, true, []string{".html", ".js", ".css"})
-	if err != nil {
+	if err := utils.Copy(rawFolder, themedFolder, true, []string{".html", ".js", ".css"}); err != nil {
 		utils.Fatal(err)
 	}
 

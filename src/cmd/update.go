@@ -117,3 +117,8 @@ func Update(currentVersion string) bool {
 	utils.PrintSuccess("Updated to v" + tagName)
 	return true
 }
+
+func permissionError(err error) {
+	utils.PrintError("Update failed: " + err.Error())
+	os.Exit(1)
+}
