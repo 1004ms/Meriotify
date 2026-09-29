@@ -1,5 +1,12 @@
 # Meriotify changes
 
+## 1.1.4
+
+- Fixed the Meriotify Marketplace sidebar icon disappearing.
+- Marketplace branding now patches the manifest Spotify actually reads.
+- `meriotify update` now uses the language selected during installation.
+- The selected language is persisted independently from the current PowerShell session.
+
 ## 1.1.3
 
 - New Meriotify Marketplace icon and visible branding.

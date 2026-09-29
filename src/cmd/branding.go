@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,8 +9,6 @@ import (
 	"github.com/1004ms/Meriotify/src/utils"
 )
 
-// ApplyMarketplaceBranding keeps the upstream Marketplace runtime intact while
-// replacing only its visible Meriotify branding.
 func ApplyMarketplaceBranding() {
 	source := filepath.Join(utils.GetExecutableDir(), "MarketplaceBranding")
 	destination := filepath.Join(utils.GetMeriotifyFolder(), "CustomApps", "marketplace")
@@ -20,19 +19,23 @@ func ApplyMarketplaceBranding() {
 		return
 	}
 
-	assets := filepath.Join(destination, "assets")
-	if err := os.MkdirAll(assets, 0700); err != nil {
-		return
+	icon, iconErr := os.ReadFile(filepath.Join(source, "icon.svg"))
+	activeIcon, activeIconErr := os.ReadFile(filepath.Join(source, "icon-filled.svg"))
+	manifestPath := filepath.Join(destination, "manifest.json")
+	manifestData, manifestErr := os.ReadFile(manifestPath)
+
+	if iconErr == nil && activeIconErr == nil && manifestErr == nil {
+		manifest := map[string]any{}
+		if json.Unmarshal(manifestData, &manifest) == nil {
+			manifest["name"] = "Meriotify"
+			manifest["icon"] = strings.TrimSpace(string(icon))
+			manifest["active-icon"] = strings.TrimSpace(string(activeIcon))
+			if encoded, err := json.MarshalIndent(manifest, "", "  "); err == nil {
+				_ = os.WriteFile(manifestPath, encoded, 0600)
+			}
+		}
 	}
 
-	_ = utils.CopyFile(filepath.Join(source, "icon.svg"), assets)
-	_ = utils.CopyFile(filepath.Join(source, "icon-filled.svg"), assets)
-
-	settingsSource := filepath.Join(source, "settings.json")
-	_ = utils.CopyFile(settingsSource, destination)
-
-	// Change only the visible product label. Never rename the Spicetify API or
-	// other compatibility identifiers used by Marketplace internally.
 	_ = filepath.WalkDir(destination, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return nil

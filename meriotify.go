@@ -290,7 +290,7 @@ func main() {
 				refresh.Stdout = io.Discard
 				refresh.Stderr = io.Discard
 				if refresh.Run() != nil {
-					utils.PrintWarning("Updated, but Spotify refresh failed")
+					utils.PrintWarning(utils.Tr("Updated, but Spotify refresh failed", "Aggiornato, ma il refresh di Spotify non e riuscito"))
 				}
 			}
 		}

@@ -1,0 +1,14 @@
+Meriotify 1.1.4 patch
+
+Fixes:
+- Marketplace sidebar icon/name are patched in manifest.json (the file Spotify actually reads).
+- meriotify update uses the language selected by the installer.
+- Installer persists the language in %APPDATA%\meriotify\language as well as MERIOTIFY_LANG.
+
+Copy this folder over the repository root and overwrite matching files.
+Then run:
+  git add .
+  git commit -m "Meriotify 1.1.4"
+  git push
+
+After CI is green, publish release tag v1.1.4 from main.

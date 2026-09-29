@@ -16,11 +16,11 @@ import (
 func Update(currentVersion string) bool {
 	tagName, err := utils.FetchLatestTag()
 	if err != nil {
-		utils.PrintError("Update check failed")
+		utils.PrintError(utils.Tr("Update check failed", "Controllo aggiornamenti non riuscito"))
 		return false
 	}
 	if !isVersionNewer(tagName, currentVersion) {
-		utils.PrintSuccess("Already up to date")
+		utils.PrintSuccess(utils.Tr("Already up to date", "Gia aggiornato"))
 		return false
 	}
 
@@ -46,11 +46,11 @@ func Update(currentVersion string) bool {
 		location += ".tar.gz"
 	}
 
-	spinner, _ := utils.Spinner.Start("Updating Meriotify")
+	spinner, _ := utils.Spinner.Start(utils.Tr("Updating Meriotify", "Aggiornamento Meriotify"))
 
 	out, err := os.Create(location)
 	if err != nil {
-		spinner.Fail("Update failed")
+		spinner.Fail(utils.Tr("Update failed", "Aggiornamento non riuscito"))
 		utils.Fatal(err)
 	}
 
@@ -58,14 +58,14 @@ func Update(currentVersion string) bool {
 	resp, err := client.Get(assetURL)
 	if err != nil {
 		out.Close()
-		spinner.Fail("Update failed")
+		spinner.Fail(utils.Tr("Update failed", "Aggiornamento non riuscito"))
 		utils.Fatal(err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		out.Close()
-		spinner.Fail("Update failed")
+		spinner.Fail(utils.Tr("Update failed", "Aggiornamento non riuscito"))
 		utils.Fatal(fmt.Errorf("unexpected HTTP status: %s for %s", resp.Status, assetURL))
 	}
 
@@ -74,17 +74,17 @@ func Update(currentVersion string) bool {
 	closeBodyErr := resp.Body.Close()
 	closeFileErr := out.Close()
 	if copyErr != nil {
-		spinner.Fail("Update failed")
+		spinner.Fail(utils.Tr("Update failed", "Aggiornamento non riuscito"))
 		utils.Fatal(copyErr)
 	}
 	if closeBodyErr != nil || closeFileErr != nil {
-		spinner.Fail("Update failed")
+		spinner.Fail(utils.Tr("Update failed", "Aggiornamento non riuscito"))
 		if closeFileErr != nil {
 			utils.Fatal(closeFileErr)
 		}
 		utils.Fatal(closeBodyErr)
 	}
-	spinner.Success("Download complete")
+	spinner.Success(utils.Tr("Download complete", "Download completato"))
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -114,11 +114,11 @@ func Update(currentVersion string) bool {
 
 	utils.CheckExistAndDelete(location)
 	utils.CheckExistAndDelete(exeOld)
-	utils.PrintSuccess("Updated to v" + tagName)
+	utils.PrintSuccess(utils.Tr("Updated to v", "Aggiornato a v") + tagName)
 	return true
 }
 
 func permissionError(err error) {
-	utils.PrintError("Update failed: " + err.Error())
+	utils.PrintError(utils.Tr("Update failed: ", "Aggiornamento non riuscito: ") + err.Error())
 	os.Exit(1)
 }

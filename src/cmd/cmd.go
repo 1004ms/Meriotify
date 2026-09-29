@@ -308,7 +308,7 @@ func CheckUpdate(version string) {
 	latestTag, err := utils.FetchLatestTag()
 	_ = os.WriteFile(attemptPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0600)
 	if err != nil {
-		utils.PrintWarning("Cannot fetch latest Meriotify release info: " + err.Error())
+		utils.PrintWarning(utils.Tr("Cannot fetch latest Meriotify release info: ", "Impossibile controllare gli aggiornamenti: ") + err.Error())
 		notifyUpdate(readCached(), version)
 		return
 	}
@@ -321,7 +321,7 @@ func notifyUpdate(latestTag, currentVersion string) {
 	if !isVersionNewer(latestTag, currentVersion) {
 		return
 	}
-	utils.PrintInfo("Update available: v" + latestTag)
+	utils.PrintInfo(utils.Tr("Update available: v", "Aggiornamento disponibile: v") + latestTag)
 }
 
 func isVersionNewer(latest, current string) bool {

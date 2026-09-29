@@ -1,7 +1,13 @@
 $ErrorActionPreference = 'Stop'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'meriotify'
 $DataDir = Join-Path $env:APPDATA 'meriotify'
-$Lang = if ($env:MERIOTIFY_LANG -eq 'it') { 'it' } else { 'en' }
+$Lang = 'en'
+if ($env:MERIOTIFY_LANG -eq 'it') {
+    $Lang = 'it'
+} elseif (Test-Path -LiteralPath (Join-Path $DataDir 'language')) {
+    $savedLang = (Get-Content -LiteralPath (Join-Path $DataDir 'language') -Raw).Trim().ToLowerInvariant()
+    if ($savedLang -eq 'it') { $Lang = 'it' }
+}
 
 $Text = @{
     en = @{ title='Uninstalling Meriotify'; spotify='Spotify restored'; removed='Meriotify removed'; done='Done.' }

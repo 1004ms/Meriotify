@@ -170,6 +170,8 @@ try {
     Add-ToUserPath $InstallDir
     [Environment]::SetEnvironmentVariable('MERIOTIFY_LANG', $script:Lang, [EnvironmentVariableTarget]::User)
     $env:MERIOTIFY_LANG = $script:Lang
+    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $DataDir 'language') -Value $script:Lang -Encoding Ascii -NoNewline
     Ok ((T 'meriotify') -f $version)
 
     Install-Marketplace $tempRoot
