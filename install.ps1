@@ -18,6 +18,7 @@ $Strings = @{
         spotify = 'Spotify'
         done = 'Done.'
         failed = 'Installation failed.'
+        rollback = 'Partial installation removed'
         spotifyFailed = 'Spotify setup failed. Close Spotify and run the installer again.'
         admin = 'Open PowerShell normally, not as Administrator.'
         noExe = 'Meriotify could not be installed.'
@@ -31,6 +32,7 @@ $Strings = @{
         spotify = 'Spotify'
         done = 'Fatto.'
         failed = 'Installazione non riuscita.'
+        rollback = 'Installazione parziale rimossa'
         spotifyFailed = 'Configurazione Spotify non riuscita. Chiudi Spotify e rilancia il download.'
         admin = 'Apri PowerShell normalmente, non come Amministratore.'
         noExe = 'Meriotify non e stato installato.'
@@ -57,22 +59,16 @@ function Select-Language {
 
 $script:Lang = Select-Language
 function T([string]$Key) { return $Strings[$script:Lang][$Key] }
-
 function Ok([string]$Text) {
     Write-Host '  [OK] ' -ForegroundColor Green -NoNewline
     Write-Host $Text
 }
-
-function Fail([string]$Text) {
-    throw $Text
-}
-
+function Fail([string]$Text) { throw $Text }
 function Test-IsAdmin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
-
 function Get-Architecture {
     $arch = $env:PROCESSOR_ARCHITEW6432
     if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
@@ -86,54 +82,80 @@ function Get-Architecture {
     if ([Environment]::Is64BitOperatingSystem) { return 'x64' }
     return 'x32'
 }
-
-function Get-Version {
-    if ($RequestedVersion) { return $RequestedVersion.TrimStart('v') }
-    $release = Invoke-RestMethod -Headers @{ 'User-Agent' = 'Meriotify-Installer' } -Uri "https://api.github.com/repos/$Repository/releases/latest"
-    return ([string]$release.tag_name).TrimStart('v')
+function Normalize-PathPart([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    return $Value.Trim().TrimEnd('\')
 }
-
 function Add-ToUserPath([string]$Directory) {
+    $normalized = Normalize-PathPart $Directory
     $userPath = [Environment]::GetEnvironmentVariable('Path', [EnvironmentVariableTarget]::User)
     $parts = @($userPath -split ';' | Where-Object { $_ })
-    if ($parts -notcontains $Directory) {
+    $exists = @($parts | Where-Object { (Normalize-PathPart $_) -ieq $normalized }).Count -gt 0
+    if (-not $exists) {
         [Environment]::SetEnvironmentVariable('Path', (($parts + $Directory) -join ';').Trim(';'), [EnvironmentVariableTarget]::User)
     }
-    if (($env:Path -split ';') -notcontains $Directory) { $env:Path = "$Directory;$env:Path" }
-}
 
-function Run-Meriotify([string[]]$Arguments) {
-    & $script:Exe @Arguments *> $null
-    return $LASTEXITCODE
+    $processExists = @($env:Path -split ';' | Where-Object { (Normalize-PathPart $_) -ieq $normalized }).Count -gt 0
+    if (-not $processExists) { $env:Path = "$Directory;$env:Path" }
 }
+function Restore-Path([string]$UserPath, [string]$ProcessPath) {
+    [Environment]::SetEnvironmentVariable('Path', $UserPath, [EnvironmentVariableTarget]::User)
+    $env:Path = $ProcessPath
+}
+function Get-ReleaseInfo {
+    $release = Invoke-RestMethod -Headers @{ 'User-Agent' = 'Meriotify-Installer' } -Uri "https://api.github.com/repos/$Repository/releases/latest"
+    if ($RequestedVersion) {
+        $wanted = $RequestedVersion.Trim().TrimStart('v')
+        if (([string]$release.tag_name).TrimStart('v') -ne $wanted) {
+            $release = Invoke-RestMethod -Headers @{ 'User-Agent' = 'Meriotify-Installer' } -Uri "https://api.github.com/repos/$Repository/releases/tags/v$wanted"
+        }
+    }
+    return $release
+}
+function Invoke-Meriotify {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
 
+    $output = (& $script:Exe @Arguments 2>&1 | Out-String).Trim()
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        $detail = if ($output) { "`n$output" } else { '' }
+        throw "Meriotify command failed ($exitCode): meriotify $($Arguments -join ' ')$detail"
+    }
+    return $output
+}
 function Install-Marketplace([string]$TempRoot) {
     $marketAppPath = Join-Path $DataDir 'CustomApps\marketplace'
     $marketThemePath = Join-Path $DataDir 'Themes\marketplace'
-    $marketTemp = Join-Path $TempRoot 'marketplace'
     $marketZip = Join-Path $TempRoot 'marketplace.zip'
-
-    New-Item -ItemType Directory -Path $marketTemp -Force | Out-Null
-    Invoke-WebRequest -UseBasicParsing -Headers @{ 'User-Agent' = 'Meriotify-Installer' } -Uri 'https://github.com/spicetify/marketplace/releases/latest/download/marketplace.zip' -OutFile $marketZip
-    Expand-Archive -LiteralPath $marketZip -DestinationPath $marketTemp -Force
-
-    $payload = Join-Path $marketTemp 'marketplace-dist'
-    if (-not (Test-Path -LiteralPath $payload -PathType Container)) { $payload = $marketTemp }
 
     Remove-Item -LiteralPath $marketAppPath -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $marketThemePath -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $marketAppPath, $marketThemePath -Force | Out-Null
-    Copy-Item -Path (Join-Path $payload '*') -Destination $marketAppPath -Recurse -Force
+
+    Invoke-WebRequest -UseBasicParsing -Headers @{ 'User-Agent' = 'Meriotify-Installer' } -Uri 'https://github.com/spicetify/marketplace/releases/latest/download/marketplace.zip' -OutFile $marketZip
+    Expand-Archive -LiteralPath $marketZip -DestinationPath $marketAppPath -Force
+
+    $unpacked = Join-Path $marketAppPath 'marketplace-dist'
+    if (-not (Test-Path -LiteralPath $unpacked -PathType Container)) {
+        throw 'Marketplace archive does not contain marketplace-dist.'
+    }
+
+    Get-ChildItem -LiteralPath $unpacked -Force | Move-Item -Destination $marketAppPath -Force
+    Remove-Item -LiteralPath $unpacked -Recurse -Force
+    Remove-Item -LiteralPath $marketZip -Force -ErrorAction SilentlyContinue
 
     Invoke-WebRequest -UseBasicParsing -Headers @{ 'User-Agent' = 'Meriotify-Installer' } -Uri 'https://raw.githubusercontent.com/spicetify/marketplace/main/resources/color.ini' -OutFile (Join-Path $marketThemePath 'color.ini')
 
-    Run-Meriotify @('config', 'custom_apps', 'spicetify-marketplace-') | Out-Null
-    Run-Meriotify @('config', 'custom_apps', 'marketplace') | Out-Null
-    Run-Meriotify @('config', 'inject_css', '1', 'replace_colors', '1') | Out-Null
+    Invoke-Meriotify 'config' 'custom_apps' 'spicetify-marketplace-' '-q' | Out-Null
+    Invoke-Meriotify 'config' 'custom_apps' 'marketplace' | Out-Null
+    Invoke-Meriotify 'config' 'inject_css' '1' 'replace_colors' '1' | Out-Null
 
-    $currentTheme = & $script:Exe config current_theme 2>$null
-    if ([string]::IsNullOrWhiteSpace(($currentTheme | Out-String).Trim())) {
-        Run-Meriotify @('config', 'current_theme', 'MeriotifyDefault', 'color_scheme', 'meriotify') | Out-Null
+    $currentTheme = (Invoke-Meriotify 'config' 'current_theme').Trim()
+    if ([string]::IsNullOrWhiteSpace($currentTheme)) {
+        Invoke-Meriotify 'config' 'current_theme' 'marketplace' | Out-Null
     }
 }
 
@@ -148,15 +170,36 @@ Write-Host "  $(T 'download')" -ForegroundColor White
 Write-Host ''
 
 $architecture = Get-Architecture
-$version = Get-Version
-$asset = "meriotify-$version-windows-$architecture.zip"
+$release = Get-ReleaseInfo
+$version = ([string]$release.tag_name).TrimStart('v')
+$assetName = "meriotify-$version-windows-$architecture.zip"
+$assetObject = @($release.assets | Where-Object { $_.name -eq $assetName }) | Select-Object -First 1
+if (-not $assetObject) {
+    Write-Host '  [X] ' -ForegroundColor Red -NoNewline
+    Write-Host (T 'failed')
+    Write-Host "      Release asset not found: $assetName" -ForegroundColor DarkGray
+    Write-Host ''
+    return
+}
+
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("meriotify-" + [guid]::NewGuid().ToString('N'))
-$archive = Join-Path $tempRoot $asset
+$archive = Join-Path $tempRoot $assetName
 $extract = Join-Path $tempRoot 'extract'
+$backupInstall = Join-Path $tempRoot 'previous-install'
+$hadInstall = Test-Path -LiteralPath $InstallDir -PathType Container
+$oldUserPath = [Environment]::GetEnvironmentVariable('Path', [EnvironmentVariableTarget]::User)
+$oldProcessPath = $env:Path
+$oldUserLang = [Environment]::GetEnvironmentVariable('MERIOTIFY_LANG', [EnvironmentVariableTarget]::User)
+$oldProcessLang = $env:MERIOTIFY_LANG
 
 try {
     New-Item -ItemType Directory -Path $tempRoot, $extract -Force | Out-Null
-    Invoke-WebRequest -UseBasicParsing -Headers @{ 'User-Agent' = 'Meriotify-Installer' } -Uri "https://github.com/$Repository/releases/download/v$version/$asset" -OutFile $archive
+
+    if ($hadInstall) {
+        Copy-Item -LiteralPath $InstallDir -Destination $backupInstall -Recurse -Force
+    }
+
+    Invoke-WebRequest -UseBasicParsing -Headers @{ 'User-Agent' = 'Meriotify-Installer' } -Uri ([string]$assetObject.browser_download_url) -OutFile $archive
     Expand-Archive -LiteralPath $archive -DestinationPath $extract -Force
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
@@ -177,25 +220,37 @@ try {
     Install-Marketplace $tempRoot
     Ok (T 'marketplace')
 
-    $setupExit = Run-Meriotify @('-q', 'setup')
-    if ($setupExit -eq 0) {
-        Ok (T 'spotify')
-    } else {
-        Fail (T 'spotifyFailed')
-    }
+    Invoke-Meriotify '-q' 'setup' | Out-Null
+    Ok (T 'spotify')
 
     Write-Host ''
     Write-Host "  $(T 'done')" -ForegroundColor Green
     Write-Host ''
-}
-catch {
+} catch {
+    try {
+        Get-Process -Name 'meriotify' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+        if ($hadInstall -and (Test-Path -LiteralPath $backupInstall -PathType Container)) {
+            Copy-Item -LiteralPath $backupInstall -Destination $InstallDir -Recurse -Force
+        }
+        Restore-Path $oldUserPath $oldProcessPath
+        [Environment]::SetEnvironmentVariable('MERIOTIFY_LANG', $oldUserLang, [EnvironmentVariableTarget]::User)
+        if ($null -eq $oldProcessLang) {
+            Remove-Item Env:MERIOTIFY_LANG -ErrorAction SilentlyContinue
+        } else {
+            $env:MERIOTIFY_LANG = $oldProcessLang
+        }
+    } catch {
+        # Keep the original installation error below.
+    }
+
     Write-Host ''
     Write-Host '  [X] ' -ForegroundColor Red -NoNewline
     Write-Host (T 'failed')
     if ($_.Exception.Message) { Write-Host "      $($_.Exception.Message)" -ForegroundColor DarkGray }
+    Ok (T 'rollback')
     Write-Host ''
     return
-}
-finally {
+} finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
