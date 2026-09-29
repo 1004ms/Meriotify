@@ -35,9 +35,9 @@ func MigrateConfigFolder() {
 			continue
 		}
 
-		spinner, _ := Spinner.Start("Importing existing Spicetify configuration")
+		spinner, _ := Spinner.Start("Importing compatible settings from an existing installation")
 		if err := Copy(source, destination, true, nil); err != nil {
-			spinner.Fail("Failed to import Spicetify configuration")
+			spinner.Fail("Could not import existing settings")
 			Fatal(err)
 		}
 		spinner.Success("Imported existing configuration into Meriotify")

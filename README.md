@@ -1,64 +1,85 @@
-# â—† Meriotify
+<h1 align="center">Meriotify</h1>
+<p align="center"><b>Spotify, your way.</b></p>
 
-**Meriotify** is a streamlined, rebranded fork of the Spicetify CLI for customizing the desktop Spotify client on Windows, macOS and Linux.
+Meriotify is a fast Spotify customization CLI built for themes, extensions, custom apps and Marketplace without turning setup into a project of its own.
 
-The goal of this fork is simple: keep Spicetify's ecosystem compatibility while making the CLI easier to install, cleaner to use and leaner to ship.
+It keeps compatibility where the ecosystem needs it, but the user-facing experience is Meriotify: its own command, data folder, updater, installer and release flow.
 
-## What changes
+## Install on Windows
 
-- `meriotify` is the primary command and executable.
-- User configuration lives in a separate `meriotify` folder, so it can coexist with Spicetify.
-- Existing Spicetify configuration is imported on first run when possible; the original files are not deleted.
-- The injected `Spicetify` JavaScript API is intentionally preserved for extension/theme compatibility and is also exposed as `Meriotify`.
-- The core PowerShell installation is non-interactive and verifies the installed executable; Marketplace may still ask before replacing an existing local theme.
-- Release binaries use `-trimpath` and stripped debug symbols to reduce package size.
-- Update networking uses explicit timeouts, streaming downloads and a 12-hour release-check cache so normal commands do not wait on GitHub every launch.
-- File-copy/unzip paths close handles immediately and the unzip routine rejects path traversal entries.
-
-## Windows install
-
-Once this repository is published as `1004ms/Meriotify`, install from a normal **PowerShell** window:
+Open a normal PowerShell window and run:
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/1004ms/Meriotify/main/install.ps1 | iex
+irm https://github.com/1004ms/Meriotify/releases/latest/download/install.ps1 | iex
 ```
 
-The installer downloads the newest release, adds Meriotify to your user `PATH`, installs a compatibility shim for tooling that still invokes `spicetify`, and attempts to install Spicetify Marketplace.
+The installer asks for your language and then offers two modes:
 
-To skip Marketplace for one installation:
+- **Complete** — installs Meriotify, Marketplace and configures Spotify for you.
+- **Core only** — installs only the CLI so you can configure it later.
 
-```powershell
-$env:MERIOTIFY_SKIP_MARKETPLACE='1'; iwr -useb https://raw.githubusercontent.com/1004ms/Meriotify/main/install.ps1 | iex
-```
-
-If you publish the fork under a different GitHub account/repository, run `./configure-repo.ps1 -Repository "owner/Meriotify"` once before the first release. It updates the Go module/imports and Meriotify update/install endpoints consistently. You can also override the repository at install/runtime with `MERIOTIFY_REPOSITORY=owner/repo`.
-
-## First run
+For a manual first setup:
 
 ```powershell
 meriotify setup
 ```
 
-Useful commands:
+> Use the desktop Spotify client from spotify.com. The Microsoft Store build is not supported.
+
+## Everyday commands
 
 ```powershell
-meriotify -h
-meriotify --compat-version
-meriotify config-dir
-meriotify update
-meriotify restore
+meriotify setup                 # first setup / rebuild
+meriotify update                # update Meriotify
+meriotify apply                 # apply current customization
+meriotify config-dir            # open Meriotify data
+meriotify restore               # restore stock Spotify
+meriotify -h                    # command overview
 ```
+
+`meriotify init` is an alias for `meriotify setup`.
+
+## Uninstall
+
+```powershell
+irm https://github.com/1004ms/Meriotify/releases/latest/download/uninstall.ps1 | iex
+```
+
+The uninstaller can restore Spotify first and can optionally keep your themes, extensions and configuration.
+
+## What Meriotify changes
+
+- Dedicated `%APPDATA%\meriotify` user data on Windows.
+- One-command setup instead of remembering a backup/apply sequence.
+- Release-aware PowerShell installer with x64, x86 and ARM64 detection.
+- Native Marketplace installation through Meriotify rather than a second CLI installer.
+- Update checks cached for 12 hours so normal commands do not wait on GitHub every launch.
+- Size-oriented release builds (`-trimpath`, stripped debug symbols).
+- Safer archive extraction and file handling with immediate handle cleanup.
+- Cleaner CLI output and a compact command reference.
 
 ## Compatibility
 
-Meriotify deliberately keeps internal identifiers such as the `Spicetify` browser API, `spicetify-config.json`, `spicetifyWrapper.js`, route module names and the existing `check_spicetify_update` config key where changing them would break themes, extensions, Marketplace packages or upstream compatibility.
+Meriotify intentionally keeps a small compatibility layer for existing themes, extensions and Marketplace packages. Some internal names therefore still use the original API identifiers even though the command and user-facing product are Meriotify.
 
-## Build
+You can inspect the compatibility baseline with:
 
-Releases are built by GitHub Actions. The workflow builds the JavaScript wrapper, then compiles the Go CLI with size-oriented release flags and creates platform archives named `meriotify-<version>-<platform>-<arch>`.
+```powershell
+meriotify --compat-version
+```
 
-For Windows owner builds you can simply run `./build.ps1 -Version 1.0.0`; it creates the release ZIP under `dist/`. The source requires the Go version specified by `go.mod` and pnpm/Node versions used by the workflow.
+## Build from source
 
-## License and upstream
+Releases are built by GitHub Actions. The workflow builds the JavaScript compatibility bundle, compiles the Go CLI and publishes platform archives together with the Windows installer scripts.
 
-Meriotify is a modified fork of [Spicetify CLI](https://github.com/spicetify/cli). The original project is licensed under **GNU LGPL v2.1**. This fork retains the upstream `LICENSE` and the notices required for redistribution. Meriotify is not the original Spicetify project.
+For a local Windows release build:
+
+```powershell
+.\build.ps1 -Version 1.1.0
+```
+
+The required Go version is defined in `go.mod`.
+
+## License
+
+Meriotify is a modified fork of Spicetify CLI and is distributed under the GNU LGPL v2.1 terms inherited from the upstream project. See `LICENSE` and `NOTICE.md` for details.

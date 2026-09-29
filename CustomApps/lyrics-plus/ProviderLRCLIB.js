@@ -32,7 +32,7 @@ const ProviderLRCLIB = (() => {
 	function getUnsynced(body) {
 		const unsyncedLyrics = body?.plainLyrics;
 		const isInstrumental = body.instrumental;
-		if (isInstrumental) return [{ text: "â™ª Instrumental â™ª" }];
+		if (isInstrumental) return [{ text: "♪ Instrumental ♪" }];
 
 		if (!unsyncedLyrics) return null;
 
@@ -42,7 +42,7 @@ const ProviderLRCLIB = (() => {
 	function getSynced(body) {
 		const syncedLyrics = body?.syncedLyrics;
 		const isInstrumental = body.instrumental;
-		if (isInstrumental) return [{ text: "â™ª Instrumental â™ª" }];
+		if (isInstrumental) return [{ text: "♪ Instrumental ♪" }];
 
 		if (!syncedLyrics) return null;
 

@@ -23,7 +23,7 @@ var (
 			"replace_colors":         "1",
 			"overwrite_assets":       "0",
 			"spotify_launch_flags":   "",
-			"check_spicetify_update": "1",
+			"check_meriotify_update": "1",
 			"always_enable_devtools": "0",
 		},
 		"Preprocesses": {
@@ -73,12 +73,25 @@ func ParseConfig(configPath string) Config {
 		if err := defaultConfig.Write(); err != nil {
 			PrintWarning(fmt.Sprintf("Failed to save config: %s", err.Error()))
 		} else {
-			PrintSuccess("Default config-xpui.ini generated")
+			PrintSuccess("Meriotify configuration created")
 		}
 		return defaultConfig
 	}
 
 	needRewrite := false
+
+	// Migrate the old public key once, while keeping the injected browser API
+	// compatible with extensions that still expect check_spicetify_update.
+	if setting, err := cfg.GetSection("Setting"); err == nil {
+		if legacy, err := setting.GetKey("check_spicetify_update"); err == nil {
+			if _, err := setting.GetKey("check_meriotify_update"); err != nil {
+				_, _ = setting.NewKey("check_meriotify_update", legacy.String())
+			}
+			setting.DeleteKey("check_spicetify_update")
+			needRewrite = true
+		}
+	}
+
 	for sectionName, keyList := range configLayout {
 		section, err := cfg.GetSection(sectionName)
 		if err != nil {
@@ -94,7 +107,7 @@ func ParseConfig(configPath string) Config {
 	}
 
 	if needRewrite {
-		PrintSuccess("Config is updated")
+		PrintSuccess("Configuration updated")
 		cfg.SaveTo(configPath)
 	}
 

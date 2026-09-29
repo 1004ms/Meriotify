@@ -61,20 +61,20 @@ function PopupLyrics() {
 	const LyricUtils = {
 		normalize(s, emptySymbol = true) {
 			const result = s
-				.replace(/ï¼ˆ/g, "(")
-				.replace(/ï¼‰/g, ")")
-				.replace(/ã€/g, "[")
-				.replace(/ã€‘/g, "]")
-				.replace(/ã€‚/g, ". ")
-				.replace(/ï¼›/g, "; ")
-				.replace(/ï¼š/g, ": ")
-				.replace(/ï¼Ÿ/g, "? ")
-				.replace(/ï¼/g, "! ")
-				.replace(/ã€|ï¼Œ/g, ", ")
-				.replace(/â€˜|â€™|â€²|ï¼‡/g, "'")
-				.replace(/â€œ|â€/g, '"')
-				.replace(/ã€œ/g, "~")
-				.replace(/Â·|ãƒ»/g, "â€¢");
+				.replace(/（/g, "(")
+				.replace(/）/g, ")")
+				.replace(/【/g, "[")
+				.replace(/】/g, "]")
+				.replace(/。/g, ". ")
+				.replace(/；/g, "; ")
+				.replace(/：/g, ": ")
+				.replace(/？/g, "? ")
+				.replace(/！/g, "! ")
+				.replace(/、|，/g, ", ")
+				.replace(/‘|’|′|＇/g, "'")
+				.replace(/“|”/g, '"')
+				.replace(/〜/g, "~")
+				.replace(/·|・/g, "•");
 			if (emptySymbol) {
 				result.replace(/-/g, " ").replace(/\//g, " ");
 			}
@@ -165,7 +165,7 @@ function PopupLyrics() {
 					const subtitle = body["track.subtitles.get"].message.body.subtitle_list[0].subtitle;
 
 					const lyrics = JSON.parse(subtitle.subtitle_body).map((line) => ({
-						text: line.text || "â™ª",
+						text: line.text || "♪",
 						startTime: line.time.total,
 					}));
 					return { lyrics };
@@ -206,12 +206,12 @@ function PopupLyrics() {
 			lyricStr = lyricStr.lyric;
 
 			const otherInfoKeys = [
-				"\\s?ä½œ?\\s*è¯|\\s?ä½œ?\\s*æ›²|\\s?ç¼–\\s*æ›²?|\\s?ç›‘\\s*åˆ¶?",
-				".*ç¼–å†™|.*å’ŒéŸ³|.*å’Œå£°|.*åˆå£°|.*æç´|.*å½•|.*å·¥ç¨‹|.*å·¥ä½œå®¤|.*è®¾è®¡|.*å‰ªè¾‘|.*åˆ¶ä½œ|.*å‘è¡Œ|.*å‡ºå“|.*åŽæœŸ|.*æ··éŸ³|.*ç¼©æ··",
-				"åŽŸå”±|ç¿»å”±|é¢˜å­—|æ–‡æ¡ˆ|æµ·æŠ¥|å¤ç­|äºŒèƒ¡|é’¢ç´|å‰ä»–|è´æ–¯|ç¬›å­|é¼“|å¼¦ä¹",
+				"\\s?作?\\s*词|\\s?作?\\s*曲|\\s?编\\s*曲?|\\s?监\\s*制?",
+				".*编写|.*和音|.*和声|.*合声|.*提琴|.*录|.*工程|.*工作室|.*设计|.*剪辑|.*制作|.*发行|.*出品|.*后期|.*混音|.*缩混",
+				"原唱|翻唱|题字|文案|海报|古筝|二胡|钢琴|吉他|贝斯|笛子|鼓|弦乐",
 				"lrc|publish|vocal|guitar|program|produce|write|mix",
 			];
-			const otherInfoRegexp = new RegExp(`^(${otherInfoKeys.join("|")}).*(:|ï¼š)`, "i");
+			const otherInfoRegexp = new RegExp(`^(${otherInfoKeys.join("|")}).*(:|：)`, "i");
 
 			const lines = lyricStr.split(/\r?\n/).map((line) => line.trim());
 			let noLyrics = false;
@@ -219,9 +219,9 @@ function PopupLyrics() {
 				.flatMap((line) => {
 					// ["[ar:Beyond]"]
 					// ["[03:10]"]
-					// ["[03:10]", "æ°¸è¿œé«˜å”±æˆ‘æ­Œ"]
-					// ["æ°¸è¿œé«˜å”±æˆ‘æ­Œ"]
-					// ["[03:10]", "[03:10]", "æ°¸è¿œé«˜å”±æˆ‘æ­Œ"]
+					// ["[03:10]", "永远高唱我歌"]
+					// ["永远高唱我歌"]
+					// ["[03:10]", "[03:10]", "永远高唱我歌"]
 					const matchResult = line.match(/(\[.*?\])|([^[\]]+)/g) || [line];
 					if (!matchResult.length || matchResult.length === 1) {
 						return;
@@ -232,7 +232,7 @@ function PopupLyrics() {
 						text = matchResult.splice(textIndex, 1)[0];
 						text = LyricUtils.capitalize(LyricUtils.normalize(text, false));
 					}
-					if (text === "çº¯éŸ³ä¹, è¯·æ¬£èµ") noLyrics = true;
+					if (text === "纯音乐, 请欣赏") noLyrics = true;
 					return matchResult.map((slice) => {
 						const result = {};
 						const matchResult = slice.match(/[^[\]]+/g);
@@ -240,7 +240,7 @@ function PopupLyrics() {
 						const [min, sec] = [Number.parseFloat(key), Number.parseFloat(value)];
 						if (!Number.isNaN(min) && !Number.isNaN(sec) && !otherInfoRegexp.test(text)) {
 							result.startTime = min * 60 + sec;
-							result.text = text || "â™ª";
+							result.text = text || "♪";
 							return result;
 						}
 						return;
@@ -315,7 +315,7 @@ function PopupLyrics() {
 				const [min, sec] = time.replace(/\[\]<>/, "").split(":");
 
 				if (line.trim() !== "" && isSynced && time) {
-					return { text: lyric || "â™ª", startTime: Number(min) * 60 + Number(sec) };
+					return { text: lyric || "♪", startTime: Number(min) * 60 + Number(sec) };
 				}
 				return;
 			});
@@ -494,10 +494,10 @@ function PopupLyrics() {
 		for (let word of words) {
 			word ??= " ";
 			if (word) {
-				if (tempWord && /(â€œ|')$/.test(tempWord) && word !== " ") {
+				if (tempWord && /(“|')$/.test(tempWord) && word !== " ") {
 					// End of line not allowed
 					tempWord += word;
-				} else if (/(,|\.|\?|:|;|'|ï¼Œ|ã€‚|ï¼Ÿ|ï¼š|ï¼›|â€)/.test(word) && tempWord !== " ") {
+				} else if (/(,|\.|\?|:|;|'|，|。|？|：|；|”)/.test(word) && tempWord !== " ") {
 					// Start of line not allowed
 					tempWord += word;
 				} else {

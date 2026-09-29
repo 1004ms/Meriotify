@@ -14,10 +14,10 @@ import (
 )
 
 var (
-	spicetifyFolder         = utils.GetMeriotifyFolder()
+	meriotifyFolder         = utils.GetMeriotifyFolder()
 	rawFolder, themedFolder = getExtractFolder()
 	backupFolder            = utils.GetStateFolder("Backup")
-	userThemesFolder        = utils.GetSubFolder(spicetifyFolder, "Themes")
+	userThemesFolder        = utils.GetSubFolder(meriotifyFolder, "Themes")
 	quiet                   bool
 	isAppX                  = false
 	spotifyPath             string
@@ -52,7 +52,7 @@ func InitConfig(isQuiet bool) {
 }
 
 // InitPaths checks various essential paths' availabilities,
-// tries to auto-detect them and stops spicetify when any one
+// tries to auto-detect them and stops Meriotify when any one
 // of them is invalid.
 func InitPaths() {
 	spotifyPath = settingSection.Key("spotify_path").String()
@@ -112,7 +112,7 @@ func InitPaths() {
 	appPath = filepath.Join(spotifyPath, "Apps")
 
 	if isAppX {
-		appDestPath = filepath.Join(spicetifyFolder, "AppX")
+		appDestPath = filepath.Join(meriotifyFolder, "AppX")
 	} else {
 		appDestPath = appPath
 	}
@@ -204,7 +204,7 @@ func InitSetting() {
 
 // GetConfigPath returns location of config file
 func GetConfigPath() string {
-	return filepath.Join(spicetifyFolder, "config-xpui.ini")
+	return filepath.Join(meriotifyFolder, "config-xpui.ini")
 }
 
 // GetSpotifyPath returns location of Spotify client
@@ -279,7 +279,7 @@ func ReadAnswer(info string, defaultAnswer bool, quietModeAnswer bool) bool {
 // latest tag between checks. Failed network attempts are throttled for one hour.
 // Explicit `meriotify update` always bypasses this cache.
 func CheckUpdate(version string) {
-	if !settingSection.Key("check_spicetify_update").MustBool() || version == "Dev" {
+	if !settingSection.Key("check_meriotify_update").MustBool() || version == "Dev" {
 		return
 	}
 

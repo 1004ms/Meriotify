@@ -11,37 +11,37 @@ import (
 var (
 	Info = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "info",
+			Text:  "›",
 			Style: &pterm.Style{pterm.FgBlue},
 		},
 	}
 	Success = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "success",
+			Text:  "✓",
 			Style: &pterm.Style{pterm.FgGreen},
 		},
 	}
 	Warning = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "warning",
+			Text:  "!",
 			Style: &pterm.Style{pterm.FgYellow},
 		},
 	}
 	Error = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "error",
+			Text:  "×",
 			Style: &pterm.Style{pterm.FgRed},
 		},
 	}
 	Note = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "note",
+			Text:  "•",
 			Style: &pterm.Style{pterm.FgYellow},
 		},
 	}
 	FatalPrefix = pterm.PrefixPrinter{
 		Prefix: pterm.Prefix{
-			Text:  "fatal",
+			Text:  "FATAL",
 			Style: &pterm.Style{pterm.BgRed, pterm.FgBlack},
 		},
 	}

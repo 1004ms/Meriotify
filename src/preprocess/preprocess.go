@@ -195,14 +195,20 @@ func Start(version string, spotifyBasePath string, extractedAppsPath string, fla
 		}
 	}
 
-	var filesToPatch []string
+	type patchTarget struct {
+		path string
+		name string
+		ext  string
+	}
+
+	var filesToPatch []patchTarget
 	filepath.Walk(appPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil || info == nil || info.IsDir() {
 			return nil
 		}
 		ext := filepath.Ext(info.Name())
 		if ext == ".js" || ext == ".css" || ext == ".html" {
-			filesToPatch = append(filesToPatch, path)
+			filesToPatch = append(filesToPatch, patchTarget{path: path, name: info.Name(), ext: ext})
 		}
 		return nil
 	})
@@ -211,17 +217,14 @@ func Start(version string, spotifyBasePath string, extractedAppsPath string, fla
 
 	bar, _ := pterm.DefaultProgressbar.
 		WithTotal(totalFiles).
-		WithTitle("Patching files").
+		WithTitle("Optimizing files").
 		WithTitleStyle(pterm.NewStyle(pterm.Bold)).
 		WithShowCount(true).
 		Start()
-	for _, path := range filesToPatch {
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		fileName := info.Name()
-		extension := filepath.Ext(fileName)
+	for _, target := range filesToPatch {
+		path := target.path
+		fileName := target.name
+		extension := target.ext
 
 		switch extension {
 		case ".js":
@@ -280,7 +283,7 @@ func Start(version string, spotifyBasePath string, extractedAppsPath string, fla
 					}
 					return match
 				})
-				// Single pass: k+":" â†’ "v": for bare keys,
+				// Single pass: k+":" → "v": for bare keys,
 				// k -> v for all other occurrences
 				content = cssMapJSReplacer.Replace(content)
 				content = colorVariableReplaceForJS(content)

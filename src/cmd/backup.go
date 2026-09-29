@@ -53,7 +53,7 @@ Modded Spotify cannot be launched using original Shortcut/Start menu tile. To co
 
 	totalApp := len(appList)
 	if totalApp > 0 {
-		spinner.Success("Backed up app files")
+		spinner.Success("Spotify backup ready")
 	} else {
 		spinner.Fail("Failed to backup app files")
 		utils.PrintInfo("Reinstall Spotify and try again")
@@ -62,7 +62,7 @@ Modded Spotify cannot be launched using original Shortcut/Start menu tile. To co
 
 	backup.Extract(backupFolder, rawFolder)
 
-	utils.PrintBold("Preprocessing")
+	utils.PrintBold("Optimizing Spotify")
 
 	spotifyBasePath := spotifyPath
 	if spotifyBasePath == "" {
@@ -79,7 +79,7 @@ Modded Spotify cannot be launched using original Shortcut/Start menu tile. To co
 				ExposeAPIs:     preprocSection.Key("expose_apis").MustBool(false),
 				SpotifyVer:     utils.GetSpotifyVersion(prefsPath)},
 		)
-		utils.PrintSuccess("Preprocessing completed")
+		utils.PrintSuccess("Spotify optimization complete")
 	}
 
 	err = utils.Copy(rawFolder, themedFolder, true, []string{".html", ".js", ".css"})

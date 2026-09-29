@@ -34,7 +34,7 @@ url="https://github.com/$repo/releases/download/v$tag/$archive"
 tmp="${TMPDIR:-/tmp}/meriotify-$$.tar.gz"
 
 printf '  MERIOTIFY\n\n'
-printf '  â€º Downloading v%s (%s)\n' "$tag" "$target"
+printf '  › Downloading v%s (%s)\n' "$tag" "$target"
 curl -fL --progress-bar -o "$tmp" "$url"
 mkdir -p "$install_dir"
 tar xzf "$tmp" -C "$install_dir"
@@ -55,5 +55,5 @@ if [ -n "$rc" ]; then
   grep -F "$install_dir" "$rc" >/dev/null 2>&1 || printf '\n%s\n' "$add_path_line" >> "$rc"
 fi
 
-printf '\n  âœ“ Meriotify v%s installed in %s\n' "$tag" "$install_dir"
-printf '  Run: meriotify backup apply\n'
+printf '\n  ✓ Meriotify v%s installed in %s\n' "$tag" "$install_dir"
+printf '  Run: meriotify setup\n'

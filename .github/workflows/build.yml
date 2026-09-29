@@ -47,6 +47,12 @@ jobs:
       - name: Build
         run: go build -trimpath -buildvcs=false -ldflags "-s -w -X main.upstreamVersion=${{ env.UPSTREAM_COMPAT_VERSION }}" .
 
+      - name: Validate PowerShell installers
+        shell: pwsh
+        run: |
+          [void][scriptblock]::Create((Get-Content -Raw ./install.ps1))
+          [void][scriptblock]::Create((Get-Content -Raw ./uninstall.ps1))
+
       - name: Format
         run: |
           gofmt -s -l .
@@ -168,3 +174,24 @@ jobs:
           files: "meriotify-${{ env.TAG }}-${{ matrix.os }}-${{ (matrix.os == 'windows' && matrix.arch == 'amd64' && 'x64') || (matrix.os == 'windows' && matrix.arch == '386' && 'x32') || matrix.arch }}.${{ matrix.os == 'windows' && 'zip' || 'tar.gz' }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-scripts:
+    permissions:
+      contents: write
+    name: Publish installers
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Attach installer scripts
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            install.ps1
+            uninstall.ps1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

@@ -38,7 +38,7 @@ func Apply(spicetifyVersion string) {
 			spinner.Fail("Failed to copy raw assets")
 			utils.Fatal(err)
 		}
-		spinner.Success("Copied raw assets")
+		spinner.Success("Base assets synced")
 		extractedStock = true
 	}
 
@@ -48,7 +48,7 @@ func Apply(spicetifyVersion string) {
 			spinner.Fail("Failed to overwrite themed assets")
 			utils.Fatal(err)
 		}
-		spinner.Success("Overwrote themed assets")
+		spinner.Success("Theme assets applied")
 	} else if !extractedStock {
 		spinner, _ := utils.Spinner.Start("Overwriting raw assets")
 		if err := utils.Copy(rawFolder, appDestPath, true, nil); err != nil {
@@ -74,7 +74,7 @@ func Apply(spicetifyVersion string) {
 		CurrentTheme:         settingSection.Key("current_theme").MustString(""),
 		ColorScheme:          settingSection.Key("color_scheme").MustString(""),
 		InjectThemeJS:        injectJS,
-		CheckSpicetifyUpdate: settingSection.Key("check_spicetify_update").MustBool(false),
+		CheckSpicetifyUpdate: settingSection.Key("check_meriotify_update").MustBool(false),
 		Extension:            extensionList,
 		CustomApp:            customAppsList,
 		SidebarConfig:        featureSection.Key("sidebar_config").MustBool(false),
@@ -82,7 +82,7 @@ func Apply(spicetifyVersion string) {
 		ExpFeatures:          featureSection.Key("experimental_features").MustBool(false),
 		SpicetifyVer:         backupSection.Key("with").MustString(""),
 	})
-	spinner.Success("Applied additional modifications")
+	spinner.Success("Meriotify patches applied")
 
 	if len(extensionList) > 0 {
 		RefreshExtensions(extensionList...)

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$Repository
 )
@@ -15,6 +15,7 @@ $module = "github.com/$Repository"
 $files = @(
     (Join-Path $root 'go.mod'),
     (Join-Path $root 'install.ps1'),
+    (Join-Path $root 'uninstall.ps1'),
     (Join-Path $root 'install.sh'),
     (Join-Path $root 'README.md'),
     (Join-Path $root 'NOTICE.md'),
@@ -41,4 +42,4 @@ foreach ($file in $files) {
 
 Write-Host ''
 Write-Host "Meriotify repository configured as $Repository" -ForegroundColor Magenta
-Write-Host "Build with: .\build.ps1 -Version 1.0.0" -ForegroundColor Cyan
+Write-Host "Build with: .\build.ps1 -Version <version>" -ForegroundColor Cyan

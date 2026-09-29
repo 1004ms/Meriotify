@@ -328,7 +328,7 @@ func main() {
 	// Chainable commands
 	for _, v := range commands {
 		switch v {
-		case "setup":
+		case "setup", "init":
 			cmd.Backup(version, upstreamVersion, true)
 			cmd.CheckStates()
 			cmd.InitSetting()
@@ -386,148 +386,56 @@ Run "meriotify -h" for a list of valid commands.`))
 
 func help() {
 	utils.PrintBrand(version)
-	log.Println(utils.Bold("USAGE") + "\n" +
-		"meriotify [-q] [-e] [-a] \x1B[4mcommand\033[0m...\n" +
-		"meriotify {-c | --config} | {-v | --version} | {-h | --help}\n\n" +
-		utils.Bold("DESCRIPTION") + "\n" +
-		"Customize Spotify client UI and functionality\n\n" +
-		utils.Bold("CHAINABLE COMMANDS") + `
-setup               First-time setup: backup, preprocess and apply in one command.
+	log.Println(`
+USAGE
+  meriotify <command> [options]
+  meriotify setup
 
-backup              Start backup and preprocessing of app files.
+QUICK START
+  setup, init         Set up Meriotify on Spotify in one command
+  update              Update Meriotify and repair the current Spotify install
+  restore             Return Spotify to its original state
 
-apply               Apply customization.
+CUSTOMIZE
+  apply               Apply the current theme, extensions and apps
+  refresh             Refresh the active customization without rebuilding everything
+  config              View or change Meriotify settings
+  color               View or change the active theme colors
+  enable-devtools     Enable Spotify developer tools
 
-refresh             Refresh the theme's CSS, JS, colors, and assets.
-                    Use with flag "-e" to update extensions or with flag "-a" to update custom apps.
+TOOLS
+  backup              Create and preprocess a fresh Spotify backup
+  clear               Remove the current backup
+  restart             Restart Spotify
+  watch               Watch local customization files and refresh on change
+  path                Print Meriotify, Spotify or customization paths
+  config-dir          Open the Meriotify data folder
+  spotify-updates     Block or unblock Spotify client updates
 
-restore             Restore Spotify to original state.
+FOCUS OPTIONS
+  -s, --style         Theme
+  -e, --extension     Extensions
+  -a, --app           Custom apps
+  -l, --live-refresh  All customization files
 
-clear               Clear current backup files.
+GENERAL OPTIONS
+  -q, --quiet         Reduce output
+  -n, --no-restart    Do not restart Spotify after applying changes
+  -c, --config        Print the config file path
+  -v, --version       Print Meriotify version
+  -h, --help          Show this help
+  --compat-version    Print the compatibility baseline
+  --bypass-admin      Bypass the admin/root safety check (not recommended)
 
-enable-devtools     Enable Spotify's developer tools.
-                    Press Ctrl + Shift + I (Windows/Linux) or Cmd + Option + I (macOS) in the Spotify client to open.
+EXAMPLES
+  meriotify setup
+  meriotify config current_theme MeriotifyDefault
+  meriotify apply
+  meriotify -e refresh
+  meriotify config-dir
 
-watch               Enter watch mode.
-                    To update on change, use with any combination of the following flags:
-                        "-e" (for extensions),
-                        "-a" (for custom apps),
-                        "-s" (for the active theme; color.ini, user.css, theme.js, and assets)
-                        "-l" (for all of the above)
-
-
-restart             Restart Spotify client.
-
-` + utils.Bold("NON-CHAINABLE COMMANDS") + `
-spotify-updates     Block Spotify updates by patching spotify executable.
-                    Accepts "block" or "unblock" as the parameter.
-
-path                Print path of Spotify's executable, userdata, and more.
-                    1. Print executable path:
-                    meriotify path
-
-                    2. Print userdata path:
-                    meriotify path userdata
-
-                    3. Print all paths:
-                    meriotify path all
-
-                    4. Toggle focus with flags:
-                    meriotify path <flag> <option>
-
-                    Available flags and options:
-                    "-e" (for extensions),
-                    options: root, extension name, blank for all.
-
-                    "-a" (for custom apps),
-                    options: root, <app-name>, blank for all.
-
-                    "-s" (for the active theme)
-                    options: root, folder, color, css, js, assets, blank for all.
-
-                    "-c" (for config.ini)
-                    options: N/A.
-
-config              1. Print all config fields and values:
-                    meriotify config
-
-                    2. Print one config field's value:
-                    meriotify config <field>
-
-                    Example usage:
-                    meriotify config color_scheme
-                    meriotify config custom_apps
-
-                    3. Change value of one or multiple config fields.
-                    meriotify config <field> <value> [<field> <value> ...]
-
-                    "extensions" and "custom_apps" fields are arrays of values,
-                    so <value> will be appended to those fields' current value.
-                    To remove one of array's values, postfix "-" to <value>.
-
-                    Example usage:
-                    - Enable "disable_sentry" preprocess:
-                    meriotify config disable_sentry 1
-                    - Add extension "myFakeExt.js" to current extensions list:
-                    meriotify config extensions myFakeExt.js
-                    - Remove extension "wrongname.js" from extensions list:
-                    meriotify config extensions wrongname.js-
-                    - Disable "inject_css" and enable "song_page"
-                    meriotify config inject_css 0 song_page 1
-
-color               1. Print all color fields and values.
-                    meriotify color
-
-                    Color boxes require 24-bit color (True color) supported
-                    terminal to show colors correctly.
-
-                    2. Change theme's one or multiple color values.
-                    meriotify color <field> <value> [<field> <value> ...]
-
-                    <value> can be in hex or decimal (rrr,ggg,bbb) format.
-
-                    Example usage:
-                    - Change main to ff0000
-                    meriotify color main ff0000
-                    - Change sidebar to 00ff00 and button to 0000ff
-                    meriotify color sidebar 00ff00 button 0000ff
-
-config-dir          Show config directory in file viewer
-
-upgrade|update      Update Meriotify to the latest version if an update is available
-
-` + utils.Bold("FLAGS") + `
--q, --quiet         Quiet mode (no output).
-
--s, --style         Use with "watch" or "path" to focus on the active theme.
-                    Use with "watch" to auto-reload Spotify when changes are made to the active theme.
-
--e, --extension     Use with "refresh", "watch" or "path" to focus on extensions.
-                    Use with "watch" to auto-reload Spotify when changes are made to extensions.
-
--a, --app           Use with "refresh", "watch" or "path" to focus on custom apps.
-                    Use with "watch" to auto-reload Spotify when changes are made to apps.
-
--l, --live-refresh  Use with "watch" command to auto-reload Spotify when changes
-                    are made to any custom component.
-
--n, --no-restart    Do not restart Spotify after running command(s),
-                    except for the "restart" command.
-
---bypass-admin      Bypass admin or root (sudo) check. NOT RECOMMENDED
-
---                  Stop parsing flags; treat remaining arguments as command values
-
--c, --config        Print config file path and quit
-
--h, --help          Print this help text and quit
-
--v, --version       Print Meriotify version number and quit
-
---compat-version    Print the upstream Spicetify compatibility baseline and quit
-
-For config information, run "meriotify -h config".
-For more information and reporting bugs: https://github.com/1004ms/Meriotify/`)
+Config reference: meriotify -h config
+Project: https://github.com/1004ms/Meriotify`)
 }
 
 func helpConfig() {
@@ -560,12 +468,11 @@ spotify_launch_flags <string>
     Separate each flag with "|".
     To set flags from the CLI, place "--" before the value.
     Example: meriotify config spotify_launch_flags -- "--flag-1|--flag-2"
-    List of valid flags: https://spicetify.app/docs/development/spotify-cli-flags
 
 always_enable_devtools <0 | 1>
     Whether Chrome DevTools is enabled when launching/restarting Spotify.
 
-check_spicetify_update <0 | 1>
+check_meriotify_update <0 | 1>
     Whether to always check for Meriotify updates.
 
 ` + utils.Bold("[Preprocesses]") + `
@@ -583,8 +490,8 @@ remove_rtl_rule <0 | 1>
     Enable to remove all of them and improve render speed.
 
 expose_apis <0 | 1>
-    Exposes Spotify APIs through the Spicetify compatibility object (also aliased as Meriotify) that
-    are useful for making extensions to extend Spotify functionality.
+    Exposes Spotify APIs to themes and extensions through the compatibility API.
+    The same API is also available as Meriotify.
 
 ` + utils.Bold("[AdditionalOptions]") + `
 custom_apps <string>
