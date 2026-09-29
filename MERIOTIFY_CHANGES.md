@@ -1,5 +1,14 @@
 # Meriotify changes
 
+## 1.1.5
+
+- Fixed `meriotify update` failing with a temporary GitHub 404 while a new release is still uploading its assets.
+- The updater now resolves the real asset URL from the GitHub release metadata instead of assuming the file is already available.
+- Added bounded retries for release-asset publication and temporary HTTP 404/429/5xx responses.
+- Failed downloads are cleaned up and no longer leave a partial archive behind.
+- Update errors return cleanly instead of terminating with a fatal error for transient release-publication failures.
+- Preserved the installer-selected Italian/English language across self-updates.
+
 ## 1.1.4
 
 - Fixed the Meriotify Marketplace sidebar icon disappearing.

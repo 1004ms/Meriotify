@@ -1,14 +1,21 @@
-Meriotify 1.1.4 patch
+Meriotify 1.1.5 patch
 
 Fixes:
-- Marketplace sidebar icon/name are patched in manifest.json (the file Spotify actually reads).
-- meriotify update uses the language selected by the installer.
-- Installer persists the language in %APPDATA%\meriotify\language as well as MERIOTIFY_LANG.
+- Marketplace sidebar icon/name remain patched in manifest.json.
+- meriotify update keeps the language selected by the installer.
+- Installer persists the language in %APPDATA%\meriotify\language and MERIOTIFY_LANG.
+- Self-update resolves the real GitHub release asset instead of assuming it already exists.
+- New releases no longer fail immediately when GitHub exposes /releases/latest before assets finish uploading.
+- Temporary 404/429/5xx download responses are retried.
+- Partial failed downloads are removed cleanly.
+
+New file included in this patch:
+- src/utils/vcs.go
 
 Copy this folder over the repository root and overwrite matching files.
 Then run:
   git add .
-  git commit -m "Meriotify 1.1.4"
+  git commit -m "Fix self-update release race"
   git push
 
-After CI is green, publish release tag v1.1.4 from main.
+After CI is green, publish the next release as v1.1.5.
