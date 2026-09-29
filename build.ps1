@@ -87,6 +87,7 @@ Copy-Item 'css-map.json' $stage
 Copy-Item 'CustomApps' $stage -Recurse
 Copy-Item 'Extensions' $stage -Recurse
 Copy-Item 'Themes' $stage -Recurse
+Copy-Item 'MarketplaceBranding' $stage -Recurse
 Copy-Item 'jsHelper' $stage -Recurse
 
 Step 'Creating release ZIP'

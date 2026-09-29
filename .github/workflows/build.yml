@@ -158,7 +158,7 @@ jobs:
         if: env.IS_UNIX == 'true'
         uses: edgarrc/action-7z@v1
         with:
-          args: 7z a -bb0 "meriotify-${{ env.TAG }}-${{ matrix.os }}-${{ matrix.arch }}.tar" "./meriotify" "./CustomApps" "./Extensions" "./Themes" "./jsHelper" "globals.d.ts" "css-map.json"
+          args: 7z a -bb0 "meriotify-${{ env.TAG }}-${{ matrix.os }}-${{ matrix.arch }}.tar" "./meriotify" "./CustomApps" "./Extensions" "./Themes" "./MarketplaceBranding" "./jsHelper" "globals.d.ts" "css-map.json"
 
       - name: 7z - .tar.gz
         if: env.IS_UNIX == 'true'
@@ -170,7 +170,7 @@ jobs:
         if: env.IS_WIN == 'true'
         uses: edgarrc/action-7z@v1
         with:
-          args: 7z a -bb0 -mx9 "meriotify-${{ env.TAG }}-${{ matrix.os }}-${{ (matrix.arch == 'amd64' && 'x64') || (matrix.arch == 'arm64' && 'arm64') || 'x32' }}.zip" "./meriotify.exe" "./spicetify.cmd" "./CustomApps" "./Extensions" "./Themes" "./jsHelper" "globals.d.ts" "css-map.json"
+          args: 7z a -bb0 -mx9 "meriotify-${{ env.TAG }}-${{ matrix.os }}-${{ (matrix.arch == 'amd64' && 'x64') || (matrix.arch == 'arm64' && 'arm64') || 'x32' }}.zip" "./meriotify.exe" "./spicetify.cmd" "./CustomApps" "./Extensions" "./Themes" "./MarketplaceBranding" "./jsHelper" "globals.d.ts" "css-map.json"
 
       - name: Release
         if: env.IS_UNIX == 'true' || env.IS_WIN == 'true'

@@ -24,45 +24,54 @@ Modded Spotify cannot be launched using original Shortcut/Start menu tile. To co
 		}
 	}
 	backupVersion := backupSection.Key("version").MustString("")
+	backupWith := backupSection.Key("with").MustString("")
 	backStat := backupstatus.Get(prefsPath, backupFolder, backupVersion)
+	reprocessExisting := false
+
 	if !backStat.IsEmpty() {
-		// setup/apply chains should reuse a valid backup instead of failing when
-		// Spotify is already patched. This makes setup safe to run repeatedly.
 		if silent && backStat.IsBackuped() {
-			return
+			// A valid stock backup can be reprocessed directly after a Meriotify
+			// update. Spotify does not need to be restored or backed up again.
+			if backupWith == meriotifyVersion {
+				return
+			}
+			reprocessExisting = true
+		} else {
+			spotStat := spotifystatus.Get(appPath)
+			if spotStat.IsBackupable() {
+				clearBackup()
+			} else {
+				utils.PrintError("Spotify needs a clean install before a new backup can be created")
+				os.Exit(1)
+			}
+		}
+	}
+
+	if !reprocessExisting {
+		spinner, _ := utils.Spinner.Start("Backing up app files")
+		if err := backup.Start(appPath, backupFolder); err != nil {
+			spinner.Fail("Failed to backup app files")
+			utils.Fatal(err)
 		}
 
-		spotStat := spotifystatus.Get(appPath)
-		if spotStat.IsBackupable() {
-			clearBackup()
-		} else {
-			utils.PrintError("Spotify needs a clean install before a new backup can be created")
+		appList, err := os.ReadDir(backupFolder)
+		if err != nil {
+			spinner.Fail("Failed to backup app files")
+			utils.Fatal(err)
+		}
+		if len(appList) == 0 {
+			spinner.Fail("Failed to backup app files")
+			utils.PrintInfo("Reinstall Spotify and try again")
 			os.Exit(1)
 		}
-	}
-
-	spinner, _ := utils.Spinner.Start("Backing up app files")
-
-	if err := backup.Start(appPath, backupFolder); err != nil {
-		spinner.Fail("Failed to backup app files")
-		utils.Fatal(err)
-	}
-
-	appList, err := os.ReadDir(backupFolder)
-	if err != nil {
-		spinner.Fail("Failed to backup app files")
-		utils.Fatal(err)
-	}
-
-	totalApp := len(appList)
-	if totalApp > 0 {
 		spinner.Success("Spotify backup ready")
-	} else {
-		spinner.Fail("Failed to backup app files")
-		utils.PrintInfo("Reinstall Spotify and try again")
-		os.Exit(1)
 	}
 
+	// Rebuild extracted/preprocessed data from the original stock backup.
+	_ = os.RemoveAll(rawFolder)
+	_ = os.RemoveAll(themedFolder)
+	_ = os.MkdirAll(rawFolder, 0700)
+	_ = os.MkdirAll(themedFolder, 0700)
 	backup.Extract(backupFolder, rawFolder)
 
 	utils.PrintBold("Optimizing Spotify")

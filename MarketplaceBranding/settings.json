@@ -1,0 +1,9 @@
+{
+  "displayName": {
+    "en": "Meriotify",
+    "it": "Meriotify"
+  },
+  "nameId": "marketplace",
+  "icon": "assets/icon.svg",
+  "activeIcon": "assets/icon-filled.svg"
+}

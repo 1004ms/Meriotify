@@ -1,5 +1,13 @@
 # Meriotify changes
 
+## 1.1.3
+
+- New Meriotify Marketplace icon and visible branding.
+- Fixed Spotify keeping the previous Meriotify version after an update.
+- Existing backups are reprocessed automatically when Meriotify changes version.
+- Installer errors no longer close the PowerShell window before they can be read.
+- Cleaner self-update refresh flow.
+
 ## 1.1.2
 
 - Cleaner install, update and uninstall flow.

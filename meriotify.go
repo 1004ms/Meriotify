@@ -287,10 +287,10 @@ func main() {
 			ex, err := os.Executable()
 			if err == nil {
 				refresh := exec.Command(ex, "-q", "setup")
-				if refresh.Run() == nil {
-					utils.PrintSuccess("Spotify refreshed")
-				} else {
-					utils.PrintWarning("Spotify refresh failed")
+				refresh.Stdout = io.Discard
+				refresh.Stderr = io.Discard
+				if refresh.Run() != nil {
+					utils.PrintWarning("Updated, but Spotify refresh failed")
 				}
 			}
 		}
@@ -303,6 +303,7 @@ func main() {
 	for _, v := range commands {
 		switch v {
 		case "setup", "init":
+			cmd.ApplyMarketplaceBranding()
 			cmd.Backup(version, upstreamVersion, true)
 			cmd.CheckStates()
 			cmd.InitSetting()

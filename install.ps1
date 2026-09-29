@@ -64,9 +64,7 @@ function Ok([string]$Text) {
 }
 
 function Fail([string]$Text) {
-    Write-Host '  [X] ' -ForegroundColor Red -NoNewline
-    Write-Host $Text
-    exit 1
+    throw $Text
 }
 
 function Test-IsAdmin {
@@ -139,8 +137,8 @@ function Install-Marketplace([string]$TempRoot) {
     }
 }
 
-if ($PSVersionTable.PSVersion -lt [version]'5.1') { Fail (T 'failed') }
-if (Test-IsAdmin) { Fail (T 'admin') }
+if ($PSVersionTable.PSVersion -lt [version]'5.1') { Write-Host "  [X] $(T 'failed')" -ForegroundColor Red; return }
+if (Test-IsAdmin) { Write-Host "  [X] $(T 'admin')" -ForegroundColor Red; return }
 
 Write-Host ''
 Write-Host '  MERIOTIFY' -ForegroundColor Magenta
@@ -189,8 +187,12 @@ try {
     Write-Host ''
 }
 catch {
-    if ($_.Exception.Message) { Write-Host "  $($_.Exception.Message)" -ForegroundColor DarkGray }
-    Fail (T 'failed')
+    Write-Host ''
+    Write-Host '  [X] ' -ForegroundColor Red -NoNewline
+    Write-Host (T 'failed')
+    if ($_.Exception.Message) { Write-Host "      $($_.Exception.Message)" -ForegroundColor DarkGray }
+    Write-Host ''
+    return
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
