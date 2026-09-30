@@ -303,6 +303,7 @@ func main() {
 	for _, v := range commands {
 		switch v {
 		case "setup", "init":
+			cmd.EnsureMeriotifyFeatures()
 			cmd.ApplyMarketplaceBranding()
 			cmd.Backup(version, upstreamVersion, true)
 			cmd.CheckStates()

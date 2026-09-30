@@ -1,0 +1,11 @@
+{
+  "name": {
+    "en": "Meriotify",
+    "it": "Meriotify"
+  },
+  "icon": "<svg viewBox=\"0 0 256 256\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M42 198V58c0-12 10-22 22-22h22l42 78 42-78h22c12 0 22 10 22 22v140c0 12-10 22-22 22h-24V92l-39 70h-2L88 92v128H64c-12 0-22-10-22-22Z\" fill=\"currentColor\"/></svg>",
+  "active-icon": "<svg viewBox=\"0 0 256 256\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"20\" y=\"20\" width=\"216\" height=\"216\" rx=\"54\" fill=\"currentColor\"/><path d=\"M58 194V62h28l42 76 42-76h28v132h-26v-82l-34 61h-20l-34-61v82H58Z\" fill=\"var(--spice-main, #121212)\"/></svg>",
+  "subfiles": [
+    "locale.js"
+  ]
+}

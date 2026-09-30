@@ -27,7 +27,7 @@ func ApplyMarketplaceBranding() {
 	if iconErr == nil && activeIconErr == nil && manifestErr == nil {
 		manifest := map[string]any{}
 		if json.Unmarshal(manifestData, &manifest) == nil {
-			manifest["name"] = "Meriotify"
+			manifest["name"] = "Marketplace"
 			manifest["icon"] = strings.TrimSpace(string(icon))
 			manifest["active-icon"] = strings.TrimSpace(string(activeIcon))
 			if encoded, err := json.MarshalIndent(manifest, "", "  "); err == nil {

@@ -1,21 +1,14 @@
-Meriotify 1.1.5 patch
+Meriotify installer/uninstaller hardening patch
+
+Replace these files in the repository root:
+- install.ps1
+- uninstall.ps1
 
 Fixes:
-- Marketplace sidebar icon/name remain patched in manifest.json.
-- meriotify update keeps the language selected by the installer.
-- Installer persists the language in %APPDATA%\meriotify\language and MERIOTIFY_LANG.
-- Self-update resolves the real GitHub release asset instead of assuming it already exists.
-- New releases no longer fail immediately when GitHub exposes /releases/latest before assets finish uploading.
-- Temporary 404/429/5xx download responses are retried.
-- Partial failed downloads are removed cleanly.
-
-New file included in this patch:
-- src/utils/vcs.go
-
-Copy this folder over the repository root and overwrite matching files.
-Then run:
-  git add .
-  git commit -m "Fix self-update release race"
-  git push
-
-After CI is green, publish the next release as v1.1.5.
+- uninstall now removes Meriotify from both persisted and current-session PATH
+- uninstall verifies install/data folders are actually deleted before printing OK
+- uninstall retries folder deletion and reports real failure instead of silently succeeding
+- installer resolves the exact release asset from GitHub release metadata
+- installer executes Meriotify config/setup commands with all arguments correctly
+- installer reports the exact failing command/error
+- installer rolls back a partial installation instead of leaving meriotify.exe installed after failure

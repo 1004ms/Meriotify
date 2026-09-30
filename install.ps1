@@ -15,6 +15,7 @@ $Strings = @{
         download = 'Full download (Meriotify + Marketplace)'
         meriotify = 'Meriotify v{0}'
         marketplace = 'Marketplace'
+        features = 'Meriotify Hub + Core'
         spotify = 'Spotify'
         done = 'Done.'
         failed = 'Installation failed.'
@@ -29,6 +30,7 @@ $Strings = @{
         download = 'Download completo (Meriotify + Marketplace)'
         meriotify = 'Meriotify v{0}'
         marketplace = 'Marketplace'
+        features = 'Meriotify Hub + Core'
         spotify = 'Spotify'
         done = 'Fatto.'
         failed = 'Installazione non riuscita.'
@@ -159,6 +161,11 @@ function Install-Marketplace([string]$TempRoot) {
     }
 }
 
+function Enable-MeriotifyFeatures {
+    Invoke-Meriotify 'config' 'custom_apps' 'meriotify' | Out-Null
+    Invoke-Meriotify 'config' 'extensions' 'meriotify-core.js' | Out-Null
+}
+
 if ($PSVersionTable.PSVersion -lt [version]'5.1') { Write-Host "  [X] $(T 'failed')" -ForegroundColor Red; return }
 if (Test-IsAdmin) { Write-Host "  [X] $(T 'admin')" -ForegroundColor Red; return }
 
@@ -219,6 +226,9 @@ try {
 
     Install-Marketplace $tempRoot
     Ok (T 'marketplace')
+
+    Enable-MeriotifyFeatures
+    Ok (T 'features')
 
     Invoke-Meriotify '-q' 'setup' | Out-Null
     Ok (T 'spotify')
