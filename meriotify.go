@@ -152,6 +152,13 @@ func init() {
 }
 
 func main() {
+	if len(commands) > 0 && commands[0] == "hotkeys-bridge" {
+		if err := runGlobalHotkeyBridge(); err != nil && !quiet {
+			utils.PrintWarning(err.Error())
+		}
+		return
+	}
+
 	if slices.Contains(commands, "config-dir") {
 		cmd.ShowConfigDirectory()
 		return
@@ -304,6 +311,7 @@ func main() {
 		switch v {
 		case "setup", "init":
 			cmd.EnsureMeriotifyFeatures()
+			cmd.EnsureMeriotifyHotkeyBridge()
 			cmd.ApplyMarketplaceBranding()
 			cmd.Backup(version, upstreamVersion, true)
 			cmd.CheckStates()

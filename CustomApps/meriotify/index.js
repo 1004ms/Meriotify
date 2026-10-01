@@ -247,7 +247,7 @@ function Card({ title, description, enabled, children, wide = false }) {
 			React.createElement("h2", null, title),
 			React.createElement(Status, { on: Boolean(enabled) })
 		),
-		React.createElement("p", { className: "meriotify-description" }, description),
+		description ? React.createElement("p", { className: "meriotify-description" }, description) : null,
 		children
 	);
 }
@@ -361,49 +361,44 @@ function App() {
 			{ className: "meriotify-header" },
 			React.createElement("div", null,
 				React.createElement("h1", { className: "meriotify-title" }, "Meriotify"),
-				React.createElement("p", { className: "meriotify-subtitle" }, T("Fatti Spotify come vuoi tu. Accendi solo quello che ti serve, il resto non gira.", "Make Spotify yours. Turn on only what you want; everything else stays out of the way."))
+				React.createElement("p", { className: "meriotify-subtitle" }, T("Impostazioni", "Settings"))
 			),
-			React.createElement("span", { className: "meriotify-core-state" }, T("Meriotify attivo", "Meriotify active"))
+			React.createElement("span", { className: "meriotify-core-state" }, "1.3.1")
 		),
 
 		React.createElement(SectionTitle, null, T("Aspetto", "Appearance")),
 		React.createElement("div", { className: "meriotify-grid" },
 			React.createElement(Card, {
 				title: "Spotify+",
-				description: T(
-					"Un solo interruttore: tutta l'esperienza premium insieme, ma ottimizzata. Gli effetti grossi non animano più in loop quando Spotify è fermo: partono solo quando servono.",
-					"One switch enables the entire premium Meriotify experience. Dynamic artwork, track-derived colors, cinematic heroes, immersive Now Playing and advanced motion are always included."
-				),
 				enabled: settings.spotifyPlus.enabled,
 			},
 				React.createElement(Row, {
-					label: "Spotify+",
-					hint: T(
-						"ON = interfaccia completa + cover viva + colori adattivi + animazioni. OFF = Spotify normale e zero effetti Spotify+ in esecuzione.",
-						"ON = full interface + live artwork + adaptive colors + animations. OFF = stock Spotify and zero Spotify+ effects running."
-					)
+					label: "Spotify+"
 				}, React.createElement(Toggle, {
 					checked: settings.spotifyPlus.enabled,
 					onChange: (v) => update(["spotifyPlus", "enabled"], v)
-				})),
-				settings.spotifyPlus.enabled ? React.createElement("div", {
-					className: `meriotify-inline-state ${runtime.adaptiveReady ? "ready" : ""}`
-				}, runtime.adaptiveReady
-					? T("Spotify+ completo · cover, colori e motion attivi", "Full Spotify+ · artwork, colors and motion active")
-					: T("Spotify+ attivo · aspetto la cover corrente", "Spotify+ active · waiting for current artwork")) : null
+				}))
 			),
 
 			React.createElement(Card, {
 				title: T("Tema dalla cover", "Artwork Theme"),
-				description: T(
-					"Tema cover standalone quando Spotify+ è spento. Se Spotify+ è acceso, i colori della cover sono già integrati automaticamente.",
-					"Standalone artwork theme for when Spotify+ is off. When Spotify+ is enabled, artwork colors are already integrated automatically."
-				),
 				enabled: settings.adaptiveTheme.enabled,
 			},
-				React.createElement(Row, { label: T("Colori dalla cover", "Artwork colors") }, React.createElement(Toggle, { checked: settings.adaptiveTheme.enabled, onChange: (v) => update(["adaptiveTheme", "enabled"], v) })),
-				React.createElement(Row, { label: T("Intensità colore", "Color intensity"), hint: T("Da accento leggero a tema bello presente", "From a light accent to a much stronger theme") }, React.createElement(Slider, { value: settings.adaptiveTheme.intensity, min: 20, max: 100, suffix: "%", onChange: (v) => update(["adaptiveTheme", "intensity"], v) })),
-				settings.adaptiveTheme.enabled ? React.createElement("div", { className: `meriotify-inline-state ${runtime.adaptiveReady ? "ready" : ""}` }, runtime.adaptiveReady ? T("Colori presi dalla cover corrente", "Using colors from the current artwork") : T("Aspetto una cover da leggere", "Waiting for artwork")) : null
+				React.createElement(Row, {
+					label: T("Colori dalla cover", "Artwork colors")
+				}, React.createElement(Toggle, {
+					checked: settings.adaptiveTheme.enabled,
+					onChange: (v) => update(["adaptiveTheme", "enabled"], v)
+				})),
+				React.createElement(Row, {
+					label: T("Intensità", "Intensity")
+				}, React.createElement(Slider, {
+					value: settings.adaptiveTheme.intensity,
+					min: 20,
+					max: 100,
+					suffix: "%",
+					onChange: (v) => update(["adaptiveTheme", "intensity"], v)
+				}))
 			),
 
 			React.createElement(Card, {
@@ -464,12 +459,6 @@ function App() {
 						"Open or start a playlist and press Spotify's normal Shuffle button ONCE. You will see “Shuffled X Songs”. There is no automatic playlist loop anymore."
 					))
 				),
-
-				React.createElement("div", {
-					className: `meriotify-inline-state ${settings.shufflePlus.enabled ? "ready" : ""}`
-				}, settings.shufflePlus.enabled
-					? T("Shuffle+ attivo · premi Shuffle una volta sulla playlist", "Shuffle+ enabled · press Shuffle once on the playlist")
-					: T("Shuffle+ disattivato · Spotify usa il suo Shuffle normale", "Shuffle+ disabled · Spotify uses its normal Shuffle"))
 			),
 
 			React.createElement(Card, {
@@ -507,8 +496,7 @@ function App() {
 		React.createElement("div", { className: "meriotify-grid" },
 
 			React.createElement(Card, {
-				title: T("Scorciatoie", "Keybinds"),
-				description: T("Tasti rapidi per play, tracce e volume mentre Spotify è aperto. Se li spegni, non resta niente in ascolto.", "Quick keys for playback, tracks and volume while Spotify is open. Turn them off and nothing stays registered."),
+				title: T("Scorciatoie globali", "Global keybinds"),
 				enabled: settings.keybinds.enabled,
 				wide: true,
 			},

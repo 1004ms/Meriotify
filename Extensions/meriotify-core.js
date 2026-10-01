@@ -41,6 +41,10 @@
 
 	let settings = loadSettings();
 	let keyTrap = null;
+	let globalHotkeyLoopToken = 0;
+	let globalHotkeyBridgeReady = false;
+	const GLOBAL_HOTKEY_BRIDGE = "http://127.0.0.1:19473";
+	const GLOBAL_HOTKEY_CLIENT = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 	let mutedVolume = null;
 	let backgroundObjectUrl = null;
 	let backgroundPosterUrl = null;
@@ -90,6 +94,7 @@
 	let spotifyPlusPageTimer = 0;
 	let spotifyPlusWindowVisible = document.visibilityState !== "hidden";
 	let spotifyPlusPointerLastFrame = 0;
+	let adaptiveRefreshTimer = 0;
 
 	installCoreStyles();
 	document.body.classList.remove("meriotify-fps-guard");
@@ -178,7 +183,8 @@
 		if (JSON.stringify(previous.keybinds) !== JSON.stringify(settings.keybinds)) bindKeybinds();
 		if (JSON.stringify(previous.spotifyPlus) !== JSON.stringify(settings.spotifyPlus)) {
 			applySpotifyPlus();
-			applyAdaptiveTheme();
+			void applyAdaptiveTheme();
+			scheduleAdaptiveThemeRefresh(180);
 		}
 		if (JSON.stringify(previous.sleep) !== JSON.stringify(settings.sleep)) configureSleepTimer();
 		if (JSON.stringify(previous.fade) !== JSON.stringify(settings.fade)) configureFade();
@@ -241,37 +247,155 @@
 		return rgb;
 	}
 
-	function bindKeybinds() {
-		if (keyTrap) keyTrap.reset();
-		keyTrap = new Spicetify.Mousetrap(document);
-		if (!settings.keybinds.enabled) return;
-
-		const actions = {
+	function getKeybindActions() {
+		return {
 			playPause: () => Spicetify.Player.togglePlay(),
 			next: () => Spicetify.Player.next(),
 			previous: () => Spicetify.Player.back(),
 			volumeUp: () => setExtendedVolume(clamp(getExtendedVolume() + 0.05, 0, settings.volumeBoost.enabled ? 2 : 1), true),
 			volumeDown: () => setExtendedVolume(clamp(getExtendedVolume() - 0.05, 0, settings.volumeBoost.enabled ? 2 : 1), true),
 			mute: () => {
-				const current = getExtendedVolume();
-				if (current > 0.001) {
-					mutedVolume = current;
+				const now = getExtendedVolume();
+				if (now > 0.001) {
+					mutedVolume = now;
 					setExtendedVolume(0, false);
 				} else {
 					setExtendedVolume(clamp(mutedVolume ?? 0.5, 0, settings.volumeBoost.enabled ? 2 : 1), false);
 				}
 			},
 		};
+	}
 
-		for (const [name, callback] of Object.entries(actions)) {
+	function executeKeybindAction(name) {
+		const action = getKeybindActions()[String(name || "")];
+		if (typeof action === "function") action();
+	}
+
+	function isWindowsClient() {
+		const osName = String(Spicetify.Platform?.PlatformData?.os_name || "").toLowerCase();
+		return osName.includes("win") || /windows/i.test(navigator.userAgent || "");
+	}
+
+	async function bridgeGet(path) {
+		const url = `${GLOBAL_HOTKEY_BRIDGE}${path}`;
+		if (Spicetify.CosmosAsync?.get) {
+			return await Spicetify.CosmosAsync.get(url);
+		}
+		const response = await fetch(url, { cache: "no-store" });
+		if (!response.ok) throw new Error(`Global hotkey bridge HTTP ${response.status}`);
+		return await response.json();
+	}
+
+	async function bridgePost(path, body) {
+		const url = `${GLOBAL_HOTKEY_BRIDGE}${path}`;
+		if (Spicetify.CosmosAsync?.post) {
+			return await Spicetify.CosmosAsync.post(url, body);
+		}
+		const response = await fetch(url, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+			cache: "no-store",
+		});
+		if (!response.ok) throw new Error(`Global hotkey bridge HTTP ${response.status}`);
+		return await response.json().catch(() => ({}));
+	}
+
+	function globalHotkeyPayload() {
+		return {
+			enabled: Boolean(settings.keybinds.enabled),
+			keybinds: {
+				playPause: String(settings.keybinds.playPause || ""),
+				next: String(settings.keybinds.next || ""),
+				previous: String(settings.keybinds.previous || ""),
+				volumeUp: String(settings.keybinds.volumeUp || ""),
+				volumeDown: String(settings.keybinds.volumeDown || ""),
+				mute: String(settings.keybinds.mute || ""),
+			},
+		};
+	}
+
+	function stopGlobalHotkeyLoop() {
+		globalHotkeyLoopToken++;
+		globalHotkeyBridgeReady = false;
+	}
+
+	function configureGlobalHotkeys() {
+		const token = ++globalHotkeyLoopToken;
+
+		if (!settings.keybinds.enabled || !isWindowsClient()) {
+			globalHotkeyBridgeReady = false;
+			if (isWindowsClient()) {
+				void bridgePost("/config", { enabled: false, keybinds: {} }).catch(() => {});
+			}
+			return;
+		}
+
+		const client = `${GLOBAL_HOTKEY_CLIENT}-${token}`;
+		const payload = globalHotkeyPayload();
+
+		void (async () => {
+			let failures = 0;
+
+			try {
+				await bridgePost("/config", payload);
+			} catch {}
+
+			while (
+				token === globalHotkeyLoopToken &&
+				settings.keybinds.enabled &&
+				isWindowsClient()
+			) {
+				try {
+					const result = await bridgeGet(`/next?client=${encodeURIComponent(client)}`);
+					if (token !== globalHotkeyLoopToken || !settings.keybinds.enabled) return;
+
+					globalHotkeyBridgeReady = true;
+					failures = 0;
+
+					if (result?.action) {
+						executeKeybindAction(result.action);
+					}
+				} catch {
+					failures++;
+					if (failures >= 2) globalHotkeyBridgeReady = false;
+
+					await new Promise((resolve) => setTimeout(resolve, Math.min(1200, 250 * failures)));
+
+					if (failures % 3 === 0) {
+						try {
+							await bridgePost("/config", payload);
+						} catch {}
+					}
+				}
+			}
+		})();
+	}
+
+	function bindKeybinds() {
+		if (keyTrap) keyTrap.reset();
+		keyTrap = new Spicetify.Mousetrap(document);
+
+		if (!settings.keybinds.enabled) {
+			stopGlobalHotkeyLoop();
+			configureGlobalHotkeys();
+			return;
+		}
+
+		for (const name of Object.keys(getKeybindActions())) {
 			const key = String(settings.keybinds[name] || "").trim().toLowerCase();
 			if (!key) continue;
+
 			keyTrap.bind(key, (event) => {
 				event.preventDefault();
-				callback();
+				if (!globalHotkeyBridgeReady) {
+					executeKeybindAction(name);
+				}
 				return false;
 			});
 		}
+
+		configureGlobalHotkeys();
 	}
 
 	function handleSongChange() {
@@ -281,7 +405,8 @@
 				if (ready && settings.volumeBoost.enabled) setAudioBaseGain(Math.max(1, clamp(Number(settings.volumeBoost.value || 100), 100, 200) / 100));
 			}), 120);
 		}
-		applyAdaptiveTheme();
+		void applyAdaptiveTheme();
+		scheduleAdaptiveThemeRefresh(260);
 		if (settings.spotifyPlus.enabled) scheduleSpotifyPlusVisualBurst();
 		if (settings.sleep.enabled && Spicetify.Player.isPlaying()) resetSleepIdle();
 	}
@@ -731,6 +856,7 @@
 		spotifyPlusVisualTimers.push(setTimeout(() => {
 			if (settings.spotifyPlus.enabled && document.visibilityState !== "hidden") {
 				scheduleSpotifyPlusVisualSync();
+				scheduleAdaptiveThemeRefresh(40);
 			}
 		}, 220));
 	}
@@ -1054,11 +1180,91 @@
 		}
 	}
 
+	function hexToRgb(value) {
+		const match = String(value || "").trim().match(/^#?([0-9a-f]{6})$/i);
+		if (!match) return null;
+		const hex = match[1];
+		return [
+			Number.parseInt(hex.slice(0, 2), 16),
+			Number.parseInt(hex.slice(2, 4), 16),
+			Number.parseInt(hex.slice(4, 6), 16),
+		];
+	}
+
+	function currentArtworkCandidates() {
+		const meta = Spicetify.Player?.data?.item?.metadata || {};
+		const urls = [
+			meta.image_xlarge_url,
+			meta.image_large_url,
+			meta.image_url,
+		];
+
+		const selectors = [
+			'.main-nowPlayingWidget-coverArt img[src]',
+			'.main-nowPlayingView-coverArt img[src]',
+			'[data-testid="cover-art-image"][src]',
+			'[data-testid="cover-art-image"] img[src]',
+			'.main-coverSlotCollapsed-container img[src]',
+		];
+
+		for (const selector of selectors) {
+			const image = document.querySelector(selector);
+			if (image instanceof HTMLImageElement) {
+				urls.push(image.currentSrc || image.src || "");
+			}
+		}
+
+		return [...new Set(urls.map(normalizeArtworkUrl).filter(Boolean))];
+	}
+
+	async function extractAdaptivePalette() {
+		const uri = String(Spicetify.Player?.data?.item?.uri || "");
+
+		// Prefer Spotify's own color extractor. It does not depend on image CORS
+		// and is the most reliable source for Spotify-hosted artwork.
+		if (uri && typeof Spicetify.colorExtractor === "function") {
+			try {
+				const palette = await Spicetify.colorExtractor(uri);
+				const primary = hexToRgb(
+					palette?.VIBRANT_NON_ALARMING ||
+					palette?.VIBRANT ||
+					palette?.PROMINENT ||
+					palette?.LIGHT_VIBRANT
+				);
+				const secondary = hexToRgb(
+					palette?.DARK_VIBRANT ||
+					palette?.DESATURATED ||
+					palette?.PROMINENT ||
+					palette?.VIBRANT
+				);
+				if (primary) return [primary, secondary || primary];
+			} catch {}
+		}
+
+		// Local tracks / temporary API failures: fall back to the actual artwork.
+		for (const candidate of currentArtworkCandidates()) {
+			try {
+				const colors = await extractMainColors(candidate);
+				if (colors.length) return colors;
+			} catch {}
+		}
+
+		return [];
+	}
+
+	function scheduleAdaptiveThemeRefresh(delay = 240) {
+		if (adaptiveRefreshTimer) clearTimeout(adaptiveRefreshTimer);
+		adaptiveRefreshTimer = setTimeout(() => {
+			adaptiveRefreshTimer = 0;
+			if (getEffectiveAdaptiveTheme().enabled) void applyAdaptiveTheme();
+		}, delay);
+	}
+
 	function getEffectiveAdaptiveTheme() {
 		const spotifyLinked = Boolean(settings.spotifyPlus.enabled);
 		return {
 			enabled: Boolean(settings.adaptiveTheme.enabled || spotifyLinked),
-			intensity: spotifyLinked ? 88 : Number(settings.adaptiveTheme.intensity || 65),
+			intensity: spotifyLinked ? 96 : Number(settings.adaptiveTheme.intensity || 65),
 		};
 	}
 
@@ -1070,22 +1276,7 @@
 			return;
 		}
 
-		const meta = Spicetify.Player.data?.item?.metadata;
-		const candidates = [meta?.image_xlarge_url, meta?.image_large_url, meta?.image_url]
-			.map(normalizeArtworkUrl)
-			.filter(Boolean);
-		if (!candidates.length) {
-			clearAdaptiveTheme();
-			return;
-		}
-
-		let colors = [];
-		for (const candidate of [...new Set(candidates)]) {
-			try {
-				colors = await extractMainColors(candidate);
-				if (colors.length) break;
-			} catch {}
-		}
+		const colors = await extractAdaptivePalette();
 
 		if (generation !== adaptiveGeneration || !getEffectiveAdaptiveTheme().enabled) return;
 		if (!colors.length) {
@@ -1175,6 +1366,10 @@
 	}
 
 	function clearAdaptiveTheme() {
+		if (adaptiveRefreshTimer && !getEffectiveAdaptiveTheme().enabled) {
+			clearTimeout(adaptiveRefreshTimer);
+			adaptiveRefreshTimer = 0;
+		}
 		adaptiveReady = false;
 		lastAccent = null;
 		const root = document.documentElement;
@@ -2874,6 +3069,44 @@ body.meriotify-spotify-plus .main-entityHeader-image {
 /* Keep native circular/pill controls circular where that is intentional. */
 body.meriotify-spotify-plus .main-playPauseButton-button {
 	border-radius: 999px !important;
+}
+
+
+/* 1.3.1 — keep artwork colors clearly visible through Spotify+'s graphite shell. */
+body.meriotify-spotify-plus.meriotify-adaptive-theme .Root__main-view {
+	background:
+		radial-gradient(75% 42% at 70% 0%, rgba(var(--meriotify-primary-rgb), .18), transparent 72%),
+		linear-gradient(180deg, rgba(var(--meriotify-primary-rgb), .10), rgba(var(--meriotify-secondary-rgb), .035) 38%, rgba(5,7,8,.60) 82%) !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .Root__nav-bar,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .Root__right-sidebar {
+	background:
+		linear-gradient(180deg, rgba(var(--meriotify-primary-rgb), .14), rgba(var(--meriotify-secondary-rgb), .055) 48%, rgba(7,10,12,.72) 100%) !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-card-card,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-card-cardContainer,
+body.meriotify-spotify-plus.meriotify-adaptive-theme [data-testid="card-container"],
+body.meriotify-spotify-plus.meriotify-adaptive-theme .view-homeShortcutsGrid-shortcut {
+	background:
+		linear-gradient(145deg, rgba(var(--meriotify-primary-rgb), .13), rgba(var(--meriotify-secondary-rgb), .055)),
+		rgba(12,17,20,.72) !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-left,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-center,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-right,
+body.meriotify-spotify-plus.meriotify-adaptive-theme [class*="nowPlayingBar-left"],
+body.meriotify-spotify-plus.meriotify-adaptive-theme [class*="nowPlayingBar-center"],
+body.meriotify-spotify-plus.meriotify-adaptive-theme [class*="nowPlayingBar-right"] {
+	border-color: rgba(var(--meriotify-primary-rgb), .26) !important;
+	background:
+		linear-gradient(145deg, rgba(var(--meriotify-primary-rgb), .145), rgba(var(--meriotify-secondary-rgb), .060)),
+		#090d10 !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .progress-bar__fg,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .playback-progressbar .progress-bar__fg,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .volume-bar .progress-bar__fg {
+	background: var(--meriotify-accent) !important;
+	box-shadow: 0 0 12px rgba(var(--meriotify-primary-rgb), .46) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

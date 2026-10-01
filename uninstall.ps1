@@ -94,6 +94,12 @@ try {
         }
     }
 
+    try {
+        Invoke-WebRequest -UseBasicParsing -Method Post -Uri 'http://127.0.0.1:19473/shutdown' -TimeoutSec 1 | Out-Null
+    } catch {}
+    Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'MeriotifyGlobalHotkeys' -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 120
+
     Get-Process -Name 'meriotify' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Remove-InstallDirFromPath
 
