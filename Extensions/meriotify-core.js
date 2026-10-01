@@ -18,15 +18,16 @@
 	const ASSET_STORE = "assets";
 	const BACKGROUND_ASSET = "background";
 
-	const SETTINGS_VERSION = 12;
+	const SETTINGS_VERSION = 16;
 	const DEFAULTS = {
 		_schemaVersion: SETTINGS_VERSION,
-		spotifyPlus: { enabled: false, motion: false },
+		spotifyPlus: { enabled: false },
 		adaptiveTheme: { enabled: false, intensity: 65 },
 		background: { enabled: false, type: "", name: "", opacity: 0.78 },
 		sleep: { enabled: false, minutes: 120, graceSeconds: 10 },
 		fade: { enabled: false, seconds: 10 },
 		volumeBoost: { enabled: false, value: 100 },
+		shufflePlus: { enabled: false },
 		keybinds: {
 			enabled: false,
 			playPause: "ctrl+space",
@@ -80,6 +81,15 @@
 	let spotifyPlusMotionBound = false;
 	let spotifyPlusHoverTarget = null;
 	let spotifyPlusPressTarget = null;
+	let spotifyPlusVisualHistoryUnlisten = null;
+	let spotifyPlusVisualRaf = 0;
+	let spotifyPlusVisualTimers = [];
+	let spotifyPlusPointerRaf = 0;
+	let spotifyPlusPointerEvent = null;
+	let spotifyPlusSpotlight = null;
+	let spotifyPlusPageTimer = 0;
+	let spotifyPlusWindowVisible = document.visibilityState !== "hidden";
+	let spotifyPlusPointerLastFrame = 0;
 
 	installCoreStyles();
 	document.body.classList.remove("meriotify-fps-guard");
@@ -125,10 +135,30 @@
 		try {
 			const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
 			const merged = deepMerge(DEFAULTS, stored);
+			const schemaChanged = stored?._schemaVersion !== SETTINGS_VERSION;
 			merged._schemaVersion = SETTINGS_VERSION;
 			delete merged.fpsGuard;
-			merged.volumeBoost = { enabled: false, value: 100 };
-			if (stored?._schemaVersion !== SETTINGS_VERSION || Object.prototype.hasOwnProperty.call(stored || {}, "fpsGuard")) {
+			if (merged.shufflePlus) delete merged.shufflePlus.repeatPlaylist;
+			if (merged.spotifyPlus) {
+				delete merged.spotifyPlus.motion;
+				delete merged.spotifyPlus.artworkLink;
+				delete merged.spotifyPlus.artworkIntensity;
+			}
+
+			if (schemaChanged) {
+				merged.spotifyPlus.enabled = false;
+				merged.adaptiveTheme.enabled = false;
+				merged.background.enabled = false;
+				merged.sleep.enabled = false;
+				merged.fade.enabled = false;
+				merged.volumeBoost = { enabled: false, value: 100 };
+				merged.shufflePlus.enabled = false;
+				merged.keybinds.enabled = false;
+			} else {
+				merged.volumeBoost = { enabled: false, value: 100 };
+			}
+
+			if (schemaChanged || Object.prototype.hasOwnProperty.call(stored || {}, "fpsGuard") || stored?.shufflePlus?.repeatPlaylist !== undefined) {
 				localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged));
 			}
 			return merged;
@@ -146,7 +176,10 @@
 		settings = loadSettings();
 
 		if (JSON.stringify(previous.keybinds) !== JSON.stringify(settings.keybinds)) bindKeybinds();
-		if (JSON.stringify(previous.spotifyPlus) !== JSON.stringify(settings.spotifyPlus)) applySpotifyPlus();
+		if (JSON.stringify(previous.spotifyPlus) !== JSON.stringify(settings.spotifyPlus)) {
+			applySpotifyPlus();
+			applyAdaptiveTheme();
+		}
 		if (JSON.stringify(previous.sleep) !== JSON.stringify(settings.sleep)) configureSleepTimer();
 		if (JSON.stringify(previous.fade) !== JSON.stringify(settings.fade)) configureFade();
 		if (JSON.stringify(previous.volumeBoost) !== JSON.stringify(settings.volumeBoost)) configureVolumeBoost();
@@ -249,6 +282,7 @@
 			}), 120);
 		}
 		applyAdaptiveTheme();
+		if (settings.spotifyPlus.enabled) scheduleSpotifyPlusVisualBurst();
 		if (settings.sleep.enabled && Spicetify.Player.isPlaying()) resetSleepIdle();
 	}
 
@@ -600,17 +634,141 @@
 
 	function applySpotifyPlus() {
 		const enabled = Boolean(settings.spotifyPlus.enabled);
-		const motionEnabled = enabled && Boolean(settings.spotifyPlus.motion);
 		document.body.classList.toggle("meriotify-spotify-plus", enabled);
-		document.body.classList.toggle("meriotify-spotify-plus-motion", motionEnabled);
-		configureSpotifyPlusMotion(motionEnabled);
+		document.body.classList.toggle("meriotify-spotify-plus-motion", enabled);
+		document.body.classList.toggle("meriotify-spotify-plus-artwork", enabled);
+		configureSpotifyPlusMotion(enabled);
+		configureSpotifyPlusVisuals(enabled);
+		if (enabled) {
+			triggerSpotifyPlusPageEntrance();
+			scheduleSpotifyPlusVisualBurst();
+		} else {
+			clearSpotifyPlusPointerFx();
+		}
 		document.getElementById("meriotify-spotifyplus-ambient")?.remove();
 		document.getElementById("meriotify-plus-home")?.remove();
 		publishRuntime();
 	}
 
+	function spotifyPlusImageUrl(root) {
+		if (!(root instanceof Element)) return "";
+		const candidate = root.querySelector([
+			'.main-entityHeader-imageContainer img[src]',
+			'.main-entityHeader-image img[src]',
+			'.main-nowPlayingView-coverArt img[src]',
+			'[data-testid="cover-art-image"][src]',
+			'[data-testid="cover-art-image"] img[src]',
+			'img[src]'
+		].join(','));
+		if (candidate instanceof HTMLImageElement) return candidate.currentSrc || candidate.src || "";
+		return "";
+	}
+
+	function spotifyPlusCssUrl(url) {
+		return url ? `url(${JSON.stringify(url)})` : "none";
+	}
+
+	function syncSpotifyPlusVisuals() {
+		spotifyPlusVisualRaf = 0;
+		if (document.visibilityState === "hidden") return;
+		if (!document.body.classList.contains("meriotify-spotify-plus")) return;
+
+		const trackMeta = Spicetify.Player?.data?.item?.metadata || {};
+		const currentArtwork = normalizeArtworkUrl(
+			trackMeta.image_xlarge_url || trackMeta.image_large_url || trackMeta.image_url || ""
+		);
+		if (currentArtwork) {
+			document.documentElement.style.setProperty("--meriotify-track-art-url", spotifyPlusCssUrl(currentArtwork));
+		} else {
+			document.documentElement.style.removeProperty("--meriotify-track-art-url");
+		}
+
+		for (const header of document.querySelectorAll('.main-entityHeader-container')) {
+			const url = spotifyPlusImageUrl(header);
+			const title = header.querySelector('h1');
+			if (url && title) {
+				header.classList.add('meriotify-plus-hero');
+				header.style.setProperty('--meriotify-hero-url', spotifyPlusCssUrl(url));
+			} else {
+				header.classList.remove('meriotify-plus-hero');
+				header.style.removeProperty('--meriotify-hero-url');
+			}
+		}
+
+		const sidebar = document.querySelector('.Root__right-sidebar');
+		if (sidebar instanceof HTMLElement) {
+			const url = spotifyPlusImageUrl(sidebar);
+			if (url) sidebar.style.setProperty('--meriotify-nowplaying-url', spotifyPlusCssUrl(url));
+			else sidebar.style.removeProperty('--meriotify-nowplaying-url');
+		}
+	}
+
+	function scheduleSpotifyPlusVisualSync() {
+		if (spotifyPlusVisualRaf) return;
+		spotifyPlusVisualRaf = requestAnimationFrame(syncSpotifyPlusVisuals);
+	}
+
+	function clearSpotifyPlusVisuals() {
+		document.documentElement.style.removeProperty("--meriotify-track-art-url");
+		if (spotifyPlusVisualRaf) cancelAnimationFrame(spotifyPlusVisualRaf);
+		spotifyPlusVisualRaf = 0;
+		for (const header of document.querySelectorAll('.meriotify-plus-hero')) {
+			header.classList.remove('meriotify-plus-hero');
+			header.style.removeProperty('--meriotify-hero-url');
+		}
+		document.querySelector('.Root__right-sidebar')?.style?.removeProperty('--meriotify-nowplaying-url');
+	}
+
+	function clearSpotifyPlusVisualTimers() {
+		for (const timer of spotifyPlusVisualTimers) clearTimeout(timer);
+		spotifyPlusVisualTimers = [];
+	}
+
+	function scheduleSpotifyPlusVisualBurst() {
+		if (!settings.spotifyPlus.enabled || document.visibilityState === "hidden") return;
+		clearSpotifyPlusVisualTimers();
+		scheduleSpotifyPlusVisualSync();
+		spotifyPlusVisualTimers.push(setTimeout(() => {
+			if (settings.spotifyPlus.enabled && document.visibilityState !== "hidden") {
+				scheduleSpotifyPlusVisualSync();
+			}
+		}, 220));
+	}
+
+	function configureSpotifyPlusVisuals(enabled) {
+		clearSpotifyPlusVisualTimers();
+		if (typeof spotifyPlusVisualHistoryUnlisten === "function") {
+			try { spotifyPlusVisualHistoryUnlisten(); } catch {}
+		}
+		spotifyPlusVisualHistoryUnlisten = null;
+
+		if (!enabled) {
+			clearSpotifyPlusVisuals();
+			return;
+		}
+
+		scheduleSpotifyPlusVisualBurst();
+		if (typeof Spicetify.Platform?.History?.listen === "function") {
+			spotifyPlusVisualHistoryUnlisten = Spicetify.Platform.History.listen(() => {
+				scheduleSpotifyPlusVisualBurst();
+				triggerSpotifyPlusPageEntrance();
+				patchMeriotifyUpdateLogo();
+			});
+		}
+	}
+
+
 	function getSpotifyPlusMotionTarget(node) {
 		if (!(node instanceof Element)) return null;
+
+		const cover = node.closest([
+			'.main-entityHeader-imageContainer',
+			'.main-entityHeader-image',
+			'.main-nowPlayingView-coverArt',
+			'[data-testid="cover-art-image"]'
+		].join(','));
+		if (cover) return { element: cover, kind: "cover" };
+
 		const button = node.closest('button, [role="button"]');
 		if (button) return { element: button, kind: "button" };
 
@@ -647,35 +805,200 @@
 	function clearSpotifyPlusMotionTarget(target, className) {
 		if (!target?.element) return;
 		target.element.classList.remove(className);
-		if (!target.element.classList.contains("meriotify-motion-hover") && !target.element.classList.contains("meriotify-motion-press")) {
+		if (!target.element.classList.contains("meriotify-motion-hover") &&
+			!target.element.classList.contains("meriotify-motion-press") &&
+			!target.element.classList.contains("meriotify-motion-pop")) {
 			target.element.removeAttribute("data-meriotify-motion-kind");
 		}
 	}
 
+	function spawnSpotifyPlusHoverSweep(target) {
+		const element = target?.element;
+		if (!(element instanceof Element)) return;
+		const rect = element.getBoundingClientRect();
+		if (rect.width < 24 || rect.height < 18 || rect.bottom < 0 || rect.right < 0 || rect.top > innerHeight || rect.left > innerWidth) return;
+		const sweep = document.createElement("span");
+		sweep.className = `meriotify-motion-sweep meriotify-motion-sweep-${target.kind}`;
+		const radius = getComputedStyle(element).borderRadius || "14px";
+		Object.assign(sweep.style, {
+			left: `${rect.left}px`,
+			top: `${rect.top}px`,
+			width: `${rect.width}px`,
+			height: `${rect.height}px`,
+			borderRadius: radius,
+		});
+		document.body.appendChild(sweep);
+		sweep.addEventListener("animationend", () => sweep.remove(), { once: true });
+		setTimeout(() => sweep.remove(), 700);
+	}
+
+	function spawnSpotifyPlusPressBurst(event, target) {
+		if (!(event instanceof PointerEvent) && !(event instanceof MouseEvent)) return;
+
+		const burst = document.createElement("span");
+		burst.className = `meriotify-motion-burst meriotify-motion-burst-${target?.kind || "button"}`;
+		burst.style.left = `${event.clientX}px`;
+		burst.style.top = `${event.clientY}px`;
+		document.body.appendChild(burst);
+		burst.addEventListener("animationend", () => burst.remove(), { once: true });
+		setTimeout(() => burst.remove(), 950);
+
+		const sparkCount = target?.kind === "card" || target?.kind === "cover" ? 8 : 5;
+		for (let i = 0; i < sparkCount; i++) {
+			const angle = (Math.PI * 2 * i) / sparkCount + (i % 2 ? 0.18 : -0.08);
+			const distance = 22 + (i % 3) * 9;
+			const spark = document.createElement("span");
+			spark.className = "meriotify-motion-spark";
+			spark.style.left = `${event.clientX}px`;
+			spark.style.top = `${event.clientY}px`;
+			spark.style.setProperty("--mplus-spark-x", `${Math.cos(angle) * distance}px`);
+			spark.style.setProperty("--mplus-spark-y", `${Math.sin(angle) * distance}px`);
+			spark.style.setProperty("--mplus-spark-delay", `${i * 12}ms`);
+			document.body.appendChild(spark);
+			setTimeout(() => spark.remove(), 760);
+		}
+	}
+
+	function popSpotifyPlusMotionTarget(target) {
+		if (!target?.element) return;
+		const element = target.element;
+		element.setAttribute("data-meriotify-motion-kind", target.kind);
+		element.classList.remove("meriotify-motion-pop");
+		void element.offsetWidth;
+		element.classList.add("meriotify-motion-pop");
+		setTimeout(() => {
+			element.classList.remove("meriotify-motion-pop");
+			if (!element.classList.contains("meriotify-motion-hover") && !element.classList.contains("meriotify-motion-press")) {
+				element.removeAttribute("data-meriotify-motion-kind");
+			}
+		}, 460);
+	}
+
+
+	function ensureSpotifyPlusSpotlight() {
+		if (spotifyPlusSpotlight?.isConnected) return spotifyPlusSpotlight;
+		const layer = document.createElement("div");
+		layer.className = "meriotify-motion-spotlight";
+		document.body.appendChild(layer);
+		spotifyPlusSpotlight = layer;
+		return layer;
+	}
+
+	function clearSpotifyPlusPointerFx() {
+		if (spotifyPlusPointerRaf) cancelAnimationFrame(spotifyPlusPointerRaf);
+		spotifyPlusPointerRaf = 0;
+		spotifyPlusPointerEvent = null;
+		spotifyPlusSpotlight?.remove();
+		spotifyPlusSpotlight = null;
+		if (spotifyPlusHoverTarget?.element) {
+			for (const prop of ["--mplus-rx", "--mplus-ry", "--mplus-mx", "--mplus-my"]) {
+				spotifyPlusHoverTarget.element.style.removeProperty(prop);
+			}
+		}
+	}
+
+	function updateSpotifyPlusPointerFx() {
+		spotifyPlusPointerRaf = 0;
+		const event = spotifyPlusPointerEvent;
+		const target = spotifyPlusHoverTarget;
+		if (!event || !target?.element?.isConnected) return;
+
+		const element = target.element;
+		const rect = element.getBoundingClientRect();
+		if (!rect.width || !rect.height) return;
+
+		const px = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+		const py = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+		const nx = px * 2 - 1;
+		const ny = py * 2 - 1;
+
+		element.style.setProperty("--mplus-rx", `${(-ny * (target.kind === "cover" ? 7 : 4.5)).toFixed(2)}deg`);
+		element.style.setProperty("--mplus-ry", `${(nx * (target.kind === "cover" ? 8 : 5.5)).toFixed(2)}deg`);
+		element.style.setProperty("--mplus-mx", `${(px * 100).toFixed(1)}%`);
+		element.style.setProperty("--mplus-my", `${(py * 100).toFixed(1)}%`);
+
+		const spotlight = ensureSpotifyPlusSpotlight();
+		Object.assign(spotlight.style, {
+			left: `${rect.left}px`,
+			top: `${rect.top}px`,
+			width: `${rect.width}px`,
+			height: `${rect.height}px`,
+			borderRadius: getComputedStyle(element).borderRadius || "16px",
+		});
+		spotlight.style.setProperty("--mplus-mx", `${(px * 100).toFixed(1)}%`);
+		spotlight.style.setProperty("--mplus-my", `${(py * 100).toFixed(1)}%`);
+		spotlight.dataset.kind = target.kind;
+	}
+
+	function onSpotifyPlusPointerMove(event) {
+		if (!spotifyPlusWindowVisible || !settings.spotifyPlus.enabled) return;
+		if (!spotifyPlusHoverTarget?.element) return;
+		if (!["card", "cover", "button"].includes(spotifyPlusHoverTarget.kind)) return;
+
+		const now = performance.now();
+		if (now - spotifyPlusPointerLastFrame < 32) return;
+		spotifyPlusPointerLastFrame = now;
+
+		spotifyPlusPointerEvent = event;
+		if (!spotifyPlusPointerRaf) {
+			spotifyPlusPointerRaf = requestAnimationFrame(updateSpotifyPlusPointerFx);
+		}
+	}
+
+	function resetSpotifyPlusTargetFx(target) {
+		if (!target?.element) return;
+		for (const prop of ["--mplus-rx", "--mplus-ry", "--mplus-mx", "--mplus-my"]) {
+			target.element.style.removeProperty(prop);
+		}
+		spotifyPlusSpotlight?.remove();
+		spotifyPlusSpotlight = null;
+	}
+
+	function triggerSpotifyPlusPageEntrance() {
+		if (!document.body.classList.contains("meriotify-spotify-plus")) return;
+		const pane = document.querySelector(".Root__main-view, .main-view-container");
+		if (!(pane instanceof HTMLElement)) return;
+		pane.classList.remove("meriotify-plus-page-enter");
+		void pane.offsetWidth;
+		pane.classList.add("meriotify-plus-page-enter");
+		if (spotifyPlusPageTimer) clearTimeout(spotifyPlusPageTimer);
+		spotifyPlusPageTimer = setTimeout(() => {
+			pane.classList.remove("meriotify-plus-page-enter");
+			spotifyPlusPageTimer = 0;
+		}, 760);
+	}
+
 	function onSpotifyPlusPointerOver(event) {
+		if (!spotifyPlusWindowVisible || !settings.spotifyPlus.enabled) return;
 		const next = getSpotifyPlusMotionTarget(event.target);
 		if (!next) return;
 		if (spotifyPlusHoverTarget?.element === next.element) return;
+		resetSpotifyPlusTargetFx(spotifyPlusHoverTarget);
 		clearSpotifyPlusMotionTarget(spotifyPlusHoverTarget, "meriotify-motion-hover");
 		spotifyPlusHoverTarget = next;
 		next.element.setAttribute("data-meriotify-motion-kind", next.kind);
 		next.element.classList.add("meriotify-motion-hover");
+		spawnSpotifyPlusHoverSweep(next);
 	}
 
 	function onSpotifyPlusPointerOut(event) {
+		if (!spotifyPlusWindowVisible || !settings.spotifyPlus.enabled) return;
 		if (!spotifyPlusHoverTarget?.element) return;
 		if (event.relatedTarget instanceof Node && spotifyPlusHoverTarget.element.contains(event.relatedTarget)) return;
+		resetSpotifyPlusTargetFx(spotifyPlusHoverTarget);
 		clearSpotifyPlusMotionTarget(spotifyPlusHoverTarget, "meriotify-motion-hover");
 		spotifyPlusHoverTarget = null;
 	}
 
 	function onSpotifyPlusPointerDown(event) {
+		if (!spotifyPlusWindowVisible || !settings.spotifyPlus.enabled) return;
 		const next = getSpotifyPlusMotionTarget(event.target);
 		if (!next) return;
 		clearSpotifyPlusMotionTarget(spotifyPlusPressTarget, "meriotify-motion-press");
 		spotifyPlusPressTarget = next;
 		next.element.setAttribute("data-meriotify-motion-kind", next.kind);
 		next.element.classList.add("meriotify-motion-press");
+		spawnSpotifyPlusPressBurst(event, next);
 	}
 
 	function clearSpotifyPlusPress() {
@@ -683,33 +1006,66 @@
 		spotifyPlusPressTarget = null;
 	}
 
+	function onSpotifyPlusPointerUp() {
+		if (!spotifyPlusWindowVisible || !settings.spotifyPlus.enabled) return;
+		const released = spotifyPlusPressTarget;
+		clearSpotifyPlusPress();
+		popSpotifyPlusMotionTarget(released);
+	}
+
+	function onSpotifyPlusVisibilityChange() {
+		spotifyPlusWindowVisible = document.visibilityState !== "hidden";
+		if (!spotifyPlusWindowVisible) {
+			clearSpotifyPlusPointerFx();
+			document.querySelectorAll(
+				".meriotify-motion-sweep, .meriotify-motion-burst, .meriotify-motion-spark, .meriotify-motion-spotlight"
+			).forEach((node) => node.remove());
+		}
+	}
+
 	function configureSpotifyPlusMotion(enabled) {
 		if (enabled && !spotifyPlusMotionBound) {
-		document.addEventListener("pointerover", onSpotifyPlusPointerOver, true);
-		document.addEventListener("pointerout", onSpotifyPlusPointerOut, true);
-		document.addEventListener("pointerdown", onSpotifyPlusPointerDown, true);
-		document.addEventListener("pointerup", clearSpotifyPlusPress, true);
-		document.addEventListener("pointercancel", clearSpotifyPlusPress, true);
-		spotifyPlusMotionBound = true;
-		return;
+			document.addEventListener("visibilitychange", onSpotifyPlusVisibilityChange);
+			document.addEventListener("pointerover", onSpotifyPlusPointerOver, true);
+			document.addEventListener("pointerout", onSpotifyPlusPointerOut, true);
+			document.addEventListener("pointermove", onSpotifyPlusPointerMove, true);
+			document.addEventListener("pointerdown", onSpotifyPlusPointerDown, true);
+			document.addEventListener("pointerup", onSpotifyPlusPointerUp, true);
+			document.addEventListener("pointercancel", clearSpotifyPlusPress, true);
+			spotifyPlusMotionBound = true;
+			return;
 		}
 		if (!enabled && spotifyPlusMotionBound) {
-		document.removeEventListener("pointerover", onSpotifyPlusPointerOver, true);
-		document.removeEventListener("pointerout", onSpotifyPlusPointerOut, true);
-		document.removeEventListener("pointerdown", onSpotifyPlusPointerDown, true);
-		document.removeEventListener("pointerup", clearSpotifyPlusPress, true);
-		document.removeEventListener("pointercancel", clearSpotifyPlusPress, true);
-		clearSpotifyPlusMotionTarget(spotifyPlusHoverTarget, "meriotify-motion-hover");
-		clearSpotifyPlusMotionTarget(spotifyPlusPressTarget, "meriotify-motion-press");
-		spotifyPlusHoverTarget = null;
-		spotifyPlusPressTarget = null;
-		spotifyPlusMotionBound = false;
+			document.removeEventListener("visibilitychange", onSpotifyPlusVisibilityChange);
+			document.removeEventListener("pointerover", onSpotifyPlusPointerOver, true);
+			document.removeEventListener("pointerout", onSpotifyPlusPointerOut, true);
+			document.removeEventListener("pointermove", onSpotifyPlusPointerMove, true);
+			document.removeEventListener("pointerdown", onSpotifyPlusPointerDown, true);
+			document.removeEventListener("pointerup", onSpotifyPlusPointerUp, true);
+			document.removeEventListener("pointercancel", clearSpotifyPlusPress, true);
+			clearSpotifyPlusMotionTarget(spotifyPlusHoverTarget, "meriotify-motion-hover");
+			clearSpotifyPlusMotionTarget(spotifyPlusPressTarget, "meriotify-motion-press");
+			spotifyPlusHoverTarget = null;
+			spotifyPlusPressTarget = null;
+			clearSpotifyPlusPointerFx();
+			document.querySelectorAll(".meriotify-motion-sweep, .meriotify-motion-burst, .meriotify-motion-spark, .meriotify-motion-spotlight").forEach((node) => node.remove());
+			document.querySelectorAll(".meriotify-motion-pop").forEach((node) => node.classList.remove("meriotify-motion-pop"));
+			spotifyPlusMotionBound = false;
 		}
+	}
+
+	function getEffectiveAdaptiveTheme() {
+		const spotifyLinked = Boolean(settings.spotifyPlus.enabled);
+		return {
+			enabled: Boolean(settings.adaptiveTheme.enabled || spotifyLinked),
+			intensity: spotifyLinked ? 88 : Number(settings.adaptiveTheme.intensity || 65),
+		};
 	}
 
 	async function applyAdaptiveTheme() {
 		const generation = ++adaptiveGeneration;
-		if (!settings.adaptiveTheme.enabled) {
+		const effectiveTheme = getEffectiveAdaptiveTheme();
+		if (!effectiveTheme.enabled) {
 			clearAdaptiveTheme();
 			return;
 		}
@@ -731,13 +1087,13 @@
 			} catch {}
 		}
 
-		if (generation !== adaptiveGeneration || !settings.adaptiveTheme.enabled) return;
+		if (generation !== adaptiveGeneration || !getEffectiveAdaptiveTheme().enabled) return;
 		if (!colors.length) {
 			clearAdaptiveTheme();
 			return;
 		}
 
-		const intensity = clamp(Number(settings.adaptiveTheme.intensity || 65) / 100, 0.2, 1);
+		const intensity = clamp(Number(effectiveTheme.intensity || 65) / 100, 0.2, 1);
 		const primary = normalizeAccent(colors[0]);
 		const secondary = normalizeAccent(colors[1] || primary);
 		const main = mixRgb([12, 12, 12], primary, 0.12 + 0.14 * intensity);
@@ -1146,134 +1502,435 @@ body.meriotify-adaptive-theme ::selection {
 	background: rgba(var(--meriotify-primary-rgb), .45);
 }
 
-/* Spotify+ 1.2.0: desktop-shell redesign with current Now Playing wrapper coverage, runtime motion targeting and a 3-zone player shell. */
+/* Spotify+ 3.0 — reference-driven dark graphite UI.
+   Selector strategy is adapted from maintained Spicetify themes (Sleek / SharkBlue / Flow),
+   while the visual design is Meriotify-specific. */
 body.meriotify-spotify-plus {
-	--mplus-glass: rgba(17,18,22,.72);
-	--mplus-glass-strong: rgba(12,13,16,.88);
-	--mplus-glass-soft: rgba(30,31,37,.56);
-	--mplus-soft: rgba(255,255,255,.055);
-	--mplus-soft-2: rgba(255,255,255,.085);
-	--mplus-line: rgba(255,255,255,.12);
-	--mplus-line-soft: rgba(255,255,255,.065);
-	--mplus-panel-radius: 24px;
-	--mplus-card-radius: 18px;
-	--mplus-cover-radius: 14px;
-	--mplus-shadow: 0 18px 55px rgba(0,0,0,.34);
-	--mplus-shadow-soft: 0 10px 28px rgba(0,0,0,.20);
-	--mplus-inner: inset 0 1px 0 rgba(255,255,255,.065);
-	--mplus-ease: cubic-bezier(.18,.82,.2,1);
-	background: #08090b !important;
+	--mplus-accent: var(--meriotify-accent, #1ed760);
+	--mplus-accent-rgb: var(--meriotify-primary-rgb, 30, 215, 96);
+	--mplus-bg: #050708;
+	--mplus-panel: #090d10;
+	--mplus-panel-2: #0d1216;
+	--mplus-panel-3: #11171b;
+	--mplus-hover: #151c21;
+	--mplus-line: rgba(255,255,255,.065);
+	--mplus-line-strong: rgba(255,255,255,.115);
+	--mplus-text: #f5f7f7;
+	--mplus-subtext: #9aa4aa;
+	--mplus-radius-shell: 18px;
+	--mplus-radius-card: 12px;
+	--mplus-shadow: 0 22px 58px rgba(0,0,0,.34);
+	--mplus-shadow-soft: 0 12px 30px rgba(0,0,0,.22);
+	--mplus-ease: cubic-bezier(.16,1,.3,1);
+
+	/* Feed Spicetify-native controls the same palette so fewer brittle selectors are needed. */
+	--spice-main: #050708;
+	--spice-sidebar: #090d10;
+	--spice-player: #090d10;
+	--spice-card: #0d1216;
+	--spice-text: #f5f7f7;
+	--spice-subtext: #9aa4aa;
+	--spice-button: var(--mplus-accent);
+	--spice-button-active: var(--mplus-accent);
+	--spice-button-disabled: #495159;
+	--spice-main-secondary: #11171b;
+	--spice-selected-row: #f5f7f7;
+	--spice-shadow: #000000;
+	--spice-rgb-main: 5,7,8;
+	--spice-rgb-sidebar: 9,13,16;
+	--spice-rgb-player: 9,13,16;
+	--spice-rgb-main-secondary: 17,23,27;
+	--spice-rgb-shadow: 0,0,0;
+	--spice-rgb-selected-row: 245,247,247;
+
+	background: var(--mplus-bg) !important;
+	color-scheme: dark;
 }
 body.meriotify-spotify-plus *,
 body.meriotify-spotify-plus *::before,
 body.meriotify-spotify-plus *::after { box-sizing: border-box; }
 
-/* Desktop shell: each major Spotify surface feels like its own floating workspace. */
+/* App shell — one quiet canvas, four deliberate surfaces. */
 body.meriotify-spotify-plus #main,
 body.meriotify-spotify-plus .Root,
 body.meriotify-spotify-plus .Root__top-container,
-body.meriotify-spotify-plus .Root__main-view,
 body.meriotify-spotify-plus .main-view-container,
-body.meriotify-spotify-plus .main-view-container__scroll-node {
-	background-color: transparent !important;
+body.meriotify-spotify-plus .main-view-container__scroll-node,
+body.meriotify-spotify-plus .main-view-container__scroll-node-child,
+body.meriotify-spotify-plus .main-view-container__scroll-node > [data-overlayscrollbars-viewport] {
+	background: var(--mplus-bg) !important;
 }
 body.meriotify-spotify-plus .Root__top-container {
-	gap: 8px !important;
-	padding: 8px 8px 0 !important;
+	gap: 10px !important;
+	padding: 10px 10px 0 !important;
 }
-body.meriotify-spotify-plus .Root__main-view,
-body.meriotify-spotify-plus .main-view-container {
-	border-radius: var(--mplus-panel-radius) !important;
-	border: 1px solid var(--mplus-line-soft) !important;
-	box-shadow: var(--mplus-inner), 0 18px 44px rgba(0,0,0,.20) !important;
+body.meriotify-spotify-plus .Root__main-view {
+	border: 1px solid var(--mplus-line) !important;
+	border-radius: var(--mplus-radius-shell) !important;
+	background: linear-gradient(180deg, #080c0f 0%, #06090b 100%) !important;
+	box-shadow: var(--mplus-shadow) !important;
 	overflow: clip !important;
 }
+body.meriotify-spotify-plus .main-view-container__scroll-node,
+body.meriotify-spotify-plus .main-view-container__scroll-node-child { border-radius: inherit !important; }
 
-/* Top navigation becomes a compact floating control strip. */
+/* Top bar — visually belongs to the centre pane, not another giant card. */
 body.meriotify-spotify-plus .Root__globalNav {
-	margin: 0 2px 8px !important;
-	padding: 5px 8px !important;
-	min-height: 52px !important;
-	background: linear-gradient(180deg, rgba(28,29,34,.86), rgba(14,15,18,.82)) !important;
-	border: 1px solid var(--mplus-line) !important;
-	border-radius: 20px !important;
-	box-shadow: var(--mplus-inner), var(--mplus-shadow-soft) !important;
-	backdrop-filter: blur(22px) saturate(118%);
-	-webkit-backdrop-filter: blur(22px) saturate(118%);
-}
-body.meriotify-spotify-plus .main-globalNav-searchInputWrapper {
-	background: rgba(255,255,255,.065) !important;
-	border: 1px solid rgba(255,255,255,.09) !important;
-	border-radius: 16px !important;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,.035) !important;
-}
-body.meriotify-spotify-plus .main-globalNav-searchInputWrapper:focus-within {
-	background: rgba(255,255,255,.09) !important;
-	border-color: rgba(255,255,255,.18) !important;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,.055), 0 0 0 3px rgba(255,255,255,.035) !important;
-}
-body.meriotify-spotify-plus .main-globalNav-historyButtons button,
-body.meriotify-spotify-plus .main-topBar-historyButtons button,
-body.meriotify-spotify-plus .Root__globalNav button {
-	border-radius: 14px !important;
-}
-
-/* Left library and right Now Playing read as detached docks, not stock sidebars. */
-body.meriotify-spotify-plus .Root__nav-bar,
-body.meriotify-spotify-plus .Root__right-sidebar {
+	min-height: 58px !important;
+	padding: 6px 10px !important;
+	margin: 0 0 4px !important;
 	background: transparent !important;
 	border: 0 !important;
 	box-shadow: none !important;
-	overflow: visible !important;
+}
+body.meriotify-spotify-plus .main-topBar-background,
+body.meriotify-spotify-plus .main-topBar-overlay,
+body.meriotify-spotify-plus .main-topBar-container,
+body.meriotify-spotify-plus .main-topBar-topbarContent,
+body.meriotify-spotify-plus .main-topBar-topbarContentRight,
+body.meriotify-spotify-plus [data-testid="topbar-content-right"] {
+	background: transparent !important;
+	background-image: none !important;
+	box-shadow: none !important;
+}
+body.meriotify-spotify-plus .main-globalNav-searchInputWrapper,
+body.meriotify-spotify-plus .x-searchInput-searchInput,
+body.meriotify-spotify-plus [data-testid="search-container"] {
+	border: 1px solid rgba(255,255,255,.055) !important;
+	border-radius: 999px !important;
+	background: #1a2025 !important;
+	box-shadow: inset 0 1px 0 rgba(255,255,255,.035), 0 8px 18px rgba(0,0,0,.14) !important;
+	transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease !important;
+}
+body.meriotify-spotify-plus .main-globalNav-searchInputWrapper:focus-within,
+body.meriotify-spotify-plus .x-searchInput-searchInput:focus-within,
+body.meriotify-spotify-plus [data-testid="search-container"]:focus-within {
+	background: #20272d !important;
+	border-color: rgba(var(--mplus-accent-rgb), .38) !important;
+	box-shadow: 0 0 0 3px rgba(var(--mplus-accent-rgb), .09) !important;
+}
+body.meriotify-spotify-plus .x-searchInput-searchInputSearchIcon svg,
+body.meriotify-spotify-plus .x-searchInput-searchInputClearButton svg { color: var(--mplus-text) !important; }
+body.meriotify-spotify-plus .Root__globalNav button,
+body.meriotify-spotify-plus .main-topBar-historyButtons .main-topBar-button {
+	border-radius: 999px !important;
+	background-color: transparent !important;
+	border: 1px solid transparent !important;
+}
+body.meriotify-spotify-plus .Root__globalNav button:hover,
+body.meriotify-spotify-plus .main-topBar-historyButtons .main-topBar-button:hover {
+	background-color: rgba(255,255,255,.055) !important;
+	border-color: rgba(255,255,255,.04) !important;
+}
+body.meriotify-spotify-plus .main-topBar-UpgradeButton { display: none !important; }
+
+/* Left navigation — single slab with real hierarchy and brand, no card-inside-card look. */
+body.meriotify-spotify-plus .Root__nav-bar {
+	position: relative !important;
+	padding-top: 58px !important;
+	border: 1px solid var(--mplus-line) !important;
+	border-radius: var(--mplus-radius-shell) !important;
+	background: linear-gradient(180deg, #090d10 0%, #070a0c 100%) !important;
+	box-shadow: var(--mplus-shadow-soft) !important;
+	overflow: clip !important;
+}
+body.meriotify-spotify-plus .Root__nav-bar::before {
+	content: "Spotify";
+	position: absolute;
+	top: 17px;
+	left: 20px;
+	z-index: 20;
+	font: 800 23px/1.2 var(--encore-body-font-stack, CircularSp, sans-serif);
+	letter-spacing: -.035em;
+	color: var(--mplus-text);
+	pointer-events: none;
+}
+body.meriotify-spotify-plus .Root__nav-bar::after {
+	content: "+";
+	position: absolute;
+	top: 15px;
+	left: 91px;
+	z-index: 20;
+	font: 800 26px/1.2 var(--encore-body-font-stack, CircularSp, sans-serif);
+	color: var(--mplus-accent);
+	text-shadow: 0 0 18px rgba(var(--mplus-accent-rgb),.28);
+	pointer-events: none;
 }
 body.meriotify-spotify-plus .main-yourLibraryX-libraryContainer,
 body.meriotify-spotify-plus .main-yourLibraryX-library,
-body.meriotify-spotify-plus .main-nowPlayingView-nowPlayingGrid {
-	border-radius: var(--mplus-panel-radius) !important;
-	background: linear-gradient(180deg, rgba(24,25,30,.82), rgba(12,13,16,.88)) !important;
-	border: 1px solid var(--mplus-line) !important;
-	box-shadow: var(--mplus-inner), var(--mplus-shadow) !important;
-	backdrop-filter: blur(22px) saturate(112%);
-	-webkit-backdrop-filter: blur(22px) saturate(112%);
+body.meriotify-spotify-plus .main-yourLibraryX-entryPoints,
+body.meriotify-spotify-plus .main-navBar-navBar {
+	background: transparent !important;
+	background-image: none !important;
+	border: 0 !important;
+	box-shadow: none !important;
 }
-body.meriotify-spotify-plus .main-yourLibraryX-libraryContainer,
-body.meriotify-spotify-plus .main-yourLibraryX-library {
-	padding: 4px !important;
+body.meriotify-spotify-plus .main-rootlist-rootlistDividerGradient { display: none !important; }
+body.meriotify-spotify-plus .main-rootlist-rootlistDivider {
+	background: rgba(255,255,255,.065) !important;
 }
 body.meriotify-spotify-plus .main-yourLibraryX-listItem,
 body.meriotify-spotify-plus .main-yourLibraryX-navItem,
-body.meriotify-spotify-plus .main-navBar-navBarLink {
-	border-radius: 14px !important;
+body.meriotify-spotify-plus .main-yourLibraryX-navLink,
+body.meriotify-spotify-plus .main-navBar-navBarLink,
+body.meriotify-spotify-plus .main-rootlist-rootlistItem,
+body.meriotify-spotify-plus .Root__nav-bar [role="listitem"],
+body.meriotify-spotify-plus .Root__nav-bar [role="treeitem"] {
+	border-radius: 10px !important;
+	border: 1px solid transparent !important;
+	transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease !important;
 }
 body.meriotify-spotify-plus .main-yourLibraryX-listItem:hover,
 body.meriotify-spotify-plus .main-yourLibraryX-navItem:hover,
-body.meriotify-spotify-plus .main-navBar-navBarLink:hover {
-	background: rgba(255,255,255,.055) !important;
+body.meriotify-spotify-plus .main-yourLibraryX-navLink:hover,
+body.meriotify-spotify-plus .main-navBar-navBarLink:hover,
+body.meriotify-spotify-plus .main-rootlist-rootlistItem:hover,
+body.meriotify-spotify-plus .Root__nav-bar [role="listitem"]:hover,
+body.meriotify-spotify-plus .Root__nav-bar [role="treeitem"]:hover {
+	background: rgba(255,255,255,.048) !important;
+	border-color: rgba(255,255,255,.035) !important;
 }
+body.meriotify-spotify-plus .main-navBar-navBarLinkActive,
+body.meriotify-spotify-plus .main-yourLibraryX-navLinkActive,
 body.meriotify-spotify-plus .main-yourLibraryX-listItem[aria-selected="true"],
 body.meriotify-spotify-plus .main-yourLibraryX-navItem[aria-current="page"],
-body.meriotify-spotify-plus .main-navBar-navBarLinkActive {
-	background: rgba(255,255,255,.085) !important;
-	box-shadow: inset 3px 0 0 rgba(255,255,255,.72) !important;
+body.meriotify-spotify-plus .Root__nav-bar [aria-current="page"] {
+	color: var(--mplus-text) !important;
+	background: linear-gradient(90deg, rgba(var(--mplus-accent-rgb),.19), rgba(var(--mplus-accent-rgb),.055)) !important;
+	border-color: rgba(var(--mplus-accent-rgb),.14) !important;
+	box-shadow: inset 3px 0 0 var(--mplus-accent) !important;
+}
+body.meriotify-spotify-plus .main-navBar-navBarLinkActive svg,
+body.meriotify-spotify-plus .main-yourLibraryX-navLinkActive svg,
+body.meriotify-spotify-plus .Root__nav-bar [aria-current="page"] svg { color: var(--mplus-accent) !important; }
+
+/* Content rhythm. */
+body.meriotify-spotify-plus .contentSpacing { padding-inline: clamp(18px, 2.25vw, 32px) !important; }
+body.meriotify-spotify-plus .main-home-homeHeader,
+body.meriotify-spotify-plus .main-actionBarBackground-background,
+body.meriotify-spotify-plus .main-entityHeader-backgroundColor,
+body.meriotify-spotify-plus .main-entityHeader-overlay,
+body.meriotify-spotify-plus .x-entityHeader-overlay,
+body.meriotify-spotify-plus .x-actionBarBackground-background {
+	background: transparent !important;
+	background-image: none !important;
+}
+body.meriotify-spotify-plus .main-home-content h2,
+body.meriotify-spotify-plus .main-shelf-header h2,
+body.meriotify-spotify-plus [class*="shelf"] h2 {
+	font-family: Georgia, "Times New Roman", serif !important;
+	font-size: clamp(24px, 2vw, 30px) !important;
+	font-weight: 700 !important;
+	letter-spacing: -.025em !important;
 }
 
-/* Right rail: content remains native, but every section is visually separated and readable. */
-body.meriotify-spotify-plus .main-nowPlayingView-nowPlayingGrid {
-	overflow-x: clip !important;
-	overflow-y: auto !important;
-	padding: 8px !important;
+/* Real hero: use the entity artwork as a background instead of stretching the stock cover block. */
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero {
+	position: relative !important;
+	isolation: isolate !important;
+	min-height: clamp(280px, 31vw, 390px) !important;
+	margin: 10px 14px 18px !important;
+	padding: clamp(26px, 3vw, 42px) !important;
+	border: 1px solid var(--mplus-line) !important;
+	border-radius: 16px !important;
+	background-image:
+		linear-gradient(90deg, rgba(4,7,8,.97) 0%, rgba(4,7,8,.91) 26%, rgba(4,7,8,.62) 51%, rgba(4,7,8,.18) 76%, rgba(4,7,8,.08) 100%),
+		linear-gradient(0deg, rgba(4,7,8,.52), transparent 58%),
+		var(--meriotify-hero-url) !important;
+	background-position: center !important;
+	background-size: cover !important;
+	background-repeat: no-repeat !important;
+	box-shadow: 0 18px 46px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.025) !important;
+	overflow: hidden !important;
 }
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-section {
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	background: radial-gradient(90% 100% at 72% 45%, transparent 10%, rgba(0,0,0,.14) 72%);
+	pointer-events: none;
+}
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero .main-entityHeader-imageContainer,
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero .main-entityHeader-shadow {
+	display: none !important;
+}
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero .main-entityHeader-headerText,
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero [class*="entityHeader-headerText"] {
+	position: relative !important;
+	z-index: 2 !important;
+	max-width: min(62%, 720px) !important;
+	align-self: flex-end !important;
+	margin: 0 !important;
+	text-shadow: 0 3px 22px rgba(0,0,0,.52) !important;
+}
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero h1 {
+	font-family: Georgia, "Times New Roman", serif !important;
+	font-size: clamp(44px, 5.5vw, 82px) !important;
+	font-weight: 700 !important;
+	letter-spacing: -.045em !important;
+	line-height: .95 !important;
+	color: #fff !important;
+}
+body.meriotify-spotify-plus .main-entityHeader-subtitle.main-entityHeader-small.main-entityHeader-uppercase.main-entityHeader-bold {
+	display: inline-flex !important;
+	width: fit-content !important;
+	padding: 5px 10px !important;
+	border: 1px solid rgba(var(--mplus-accent-rgb),.32) !important;
+	border-radius: 999px !important;
+	background: rgba(var(--mplus-accent-rgb),.12) !important;
+	color: var(--mplus-accent) !important;
+	font-size: 11px !important;
+	letter-spacing: .08em !important;
+}
+
+/* Quick access tiles — dense, horizontal and useful. */
+body.meriotify-spotify-plus .view-homeShortcutsGrid-shortcut,
+body.meriotify-spotify-plus [data-testid*="shortcut"],
+body.meriotify-spotify-plus [class*="home"] [class*="shortcut"] {
+	border: 1px solid rgba(255,255,255,.045) !important;
+	border-radius: 10px !important;
+	background: #10161a !important;
+	box-shadow: inset 0 1px 0 rgba(255,255,255,.018) !important;
+	overflow: hidden !important;
+}
+body.meriotify-spotify-plus .view-homeShortcutsGrid-shortcut:hover,
+body.meriotify-spotify-plus [data-testid*="shortcut"]:hover,
+body.meriotify-spotify-plus [class*="home"] [class*="shortcut"]:hover {
+	background: #161d22 !important;
+	border-color: rgba(255,255,255,.075) !important;
+}
+
+/* Cards — image-first, restrained chrome, no glowing sci-fi boxes. */
+body.meriotify-spotify-plus .main-card-card,
+body.meriotify-spotify-plus .main-card-cardContainer,
+body.meriotify-spotify-plus [data-testid="card-container"],
+body.meriotify-spotify-plus [data-encore-id="card"] {
+	border: 1px solid rgba(255,255,255,.05) !important;
+	border-radius: var(--mplus-radius-card) !important;
+	background: #0d1216 !important;
+	box-shadow: 0 9px 22px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.018) !important;
+	overflow: hidden !important;
+}
+body.meriotify-spotify-plus .main-card-card:hover,
+body.meriotify-spotify-plus .main-card-cardContainer:hover,
+body.meriotify-spotify-plus [data-testid="card-container"]:hover,
+body.meriotify-spotify-plus [data-encore-id="card"]:hover {
+	background: #141a1f !important;
+	border-color: rgba(255,255,255,.085) !important;
+}
+body.meriotify-spotify-plus .main-cardImage-imageWrapper,
+body.meriotify-spotify-plus .main-cardImage-image,
+body.meriotify-spotify-plus .main-cardImage-imageWrapper img,
+body.meriotify-spotify-plus [data-testid="cover-art-image"] {
+	border-radius: 9px !important;
+	overflow: hidden !important;
+}
+body.meriotify-spotify-plus .main-cardSubHeader-root { overflow: hidden !important; }
+body.meriotify-spotify-plus [data-testid="artist-card"] img,
+body.meriotify-spotify-plus a[href^="/artist/"] .main-cardImage-imageWrapper,
+body.meriotify-spotify-plus a[href^="/artist/"] img { border-radius: 50% !important; }
+
+/* Track list — compact, clean and readable. */
+body.meriotify-spotify-plus .main-trackList-trackListHeaderStuck.main-trackList-trackListHeader {
+	background: rgba(5,7,8,.94) !important;
+	border-bottom: 1px solid rgba(255,255,255,.045) !important;
+	box-shadow: 0 18px 26px rgba(5,7,8,.82) !important;
+}
+body.meriotify-spotify-plus .main-trackList-trackListRow,
+body.meriotify-spotify-plus [role="row"][aria-rowindex] {
+	border: 1px solid transparent !important;
+	border-radius: 9px !important;
+	transition: background-color 150ms ease, border-color 150ms ease !important;
+}
+body.meriotify-spotify-plus .main-trackList-trackListRow:hover,
+body.meriotify-spotify-plus [role="row"][aria-rowindex]:hover {
+	background: rgba(255,255,255,.042) !important;
+	border-color: rgba(255,255,255,.03) !important;
+}
+body.meriotify-spotify-plus .main-trackList-trackListRow.main-trackList-selected,
+body.meriotify-spotify-plus .main-trackList-trackListRow[aria-selected="true"],
+body.meriotify-spotify-plus [role="row"][aria-rowindex][aria-selected="true"] {
+	background: rgba(255,255,255,.065) !important;
+	border-color: rgba(255,255,255,.055) !important;
+}
+body.meriotify-spotify-plus .main-trackList-active .main-trackList-rowTitle,
+body.meriotify-spotify-plus .main-trackList-active .main-trackList-rowSubTitle,
+body.meriotify-spotify-plus .main-trackList-active .main-trackList-rowDuration,
+body.meriotify-spotify-plus .main-trackList-playingIcon {
+	color: var(--mplus-accent) !important;
+}
+body.meriotify-spotify-plus .main-trackList-rowImage { border-radius: 5px !important; }
+
+/* Tabs / chips / filter controls. */
+body.meriotify-spotify-plus [data-encore-id="chip"],
+body.meriotify-spotify-plus [role="tab"],
+body.meriotify-spotify-plus .main-home-filterChipsSection button,
+body.meriotify-spotify-plus .main-yourLibraryX-filterArea button,
+body.meriotify-spotify-plus .x-sortBox-sortDropdown,
+body.meriotify-spotify-plus .x-filterBox-expandButton {
+	border: 1px solid rgba(255,255,255,.055) !important;
+	border-radius: 999px !important;
+	background: #11171b !important;
+	color: var(--mplus-text) !important;
+	box-shadow: none !important;
+}
+body.meriotify-spotify-plus [role="tab"][aria-selected="true"],
+body.meriotify-spotify-plus [data-encore-id="chip"][aria-checked="true"] {
+	background: var(--mplus-text) !important;
+	color: #050708 !important;
+	border-color: var(--mplus-text) !important;
+}
+
+/* Right Now Playing — quiet card stack with a subtle artwork wash behind it. */
+body.meriotify-spotify-plus .Root__right-sidebar {
+	position: relative !important;
+	isolation: isolate !important;
+	min-width: 0 !important;
+	border: 1px solid var(--mplus-line) !important;
+	border-radius: var(--mplus-radius-shell) !important;
+	background: linear-gradient(180deg, #090d10, #070a0c) !important;
+	box-shadow: var(--mplus-shadow-soft) !important;
+	overflow: clip !important;
+}
+body.meriotify-spotify-plus .Root__right-sidebar::before {
+	content: "";
+	position: absolute;
+	z-index: -1;
+	inset: -80px -90px auto;
+	height: 340px;
+	background-image: linear-gradient(180deg, rgba(7,10,12,.18), #090d10 88%), var(--meriotify-nowplaying-url, none);
+	background-size: cover;
+	background-position: center;
+	filter: blur(34px) saturate(.92);
+	opacity: .18;
+	transform: scale(1.12);
+	pointer-events: none;
+}
+body.meriotify-spotify-plus .Root__right-sidebar [class*="nowPlayingView-"],
+body.meriotify-spotify-plus .Root__right-sidebar [data-testid="now-playing-view"],
+body.meriotify-spotify-plus .Root__right-sidebar [data-testid="now-playing-view"] > div {
+	background: transparent !important;
+	background-image: none !important;
+	box-shadow: none !important;
 	min-width: 0 !important;
 	max-width: 100% !important;
-	margin: 0 0 8px !important;
-	padding: 14px !important;
-	background: rgba(255,255,255,.032) !important;
-	border: 1px solid var(--mplus-line-soft) !important;
-	border-radius: 17px !important;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,.028) !important;
 }
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-section:last-child { margin-bottom: 0 !important; }
+body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-section {
+	margin: 8px !important;
+	padding: 12px !important;
+	border: 1px solid rgba(255,255,255,.05) !important;
+	border-radius: 12px !important;
+	background: rgba(13,18,22,.88) !important;
+	box-shadow: inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+body.meriotify-spotify-plus .main-nowPlayingView-coverArtContainer,
+body.meriotify-spotify-plus .main-nowPlayingView-coverArt,
+body.meriotify-spotify-plus .main-nowPlayingView-coverArt img {
+	max-width: 100% !important;
+	border-radius: 12px !important;
+	overflow: hidden !important;
+}
 body.meriotify-spotify-plus .main-nowPlayingView-contextItemInfo,
 body.meriotify-spotify-plus .main-nowPlayingView-headerTextWrapper,
 body.meriotify-spotify-plus .main-nowPlayingView-headerTextWrapper *,
@@ -1283,12 +1940,6 @@ body.meriotify-spotify-plus .main-nowPlayingView-lyricsContent {
 	max-width: 100% !important;
 	width: auto !important;
 	transform: none !important;
-	word-break: normal !important;
-	overflow-wrap: anywhere !important;
-}
-body.meriotify-spotify-plus .main-nowPlayingView-contextItemInfo {
-	overflow: visible !important;
-	padding-inline: 0 !important;
 }
 body.meriotify-spotify-plus .main-nowPlayingView-contextItemInfo a,
 body.meriotify-spotify-plus .main-nowPlayingView-contextItemInfo span {
@@ -1297,193 +1948,10 @@ body.meriotify-spotify-plus .main-nowPlayingView-contextItemInfo span {
 	overflow: visible !important;
 	text-overflow: clip !important;
 }
-body.meriotify-spotify-plus .main-nowPlayingView-coverArtContainer,
-body.meriotify-spotify-plus .main-nowPlayingView-coverArtContainer img,
-body.meriotify-spotify-plus .main-nowPlayingView-coverArt {
-	max-width: 100% !important;
-	border-radius: 18px !important;
-	overflow: hidden !important;
-	box-shadow: 0 16px 36px rgba(0,0,0,.28) !important;
-}
-body.meriotify-spotify-plus .main-nowPlayingView-coverArtContainer img,
-body.meriotify-spotify-plus .main-nowPlayingView-coverArt img {
-	display: block !important;
-	width: 100% !important;
-	height: auto !important;
-	object-fit: cover !important;
-}
 body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-section:has(.x-music-video),
 body.meriotify-spotify-plus .Root__right-sidebar .x-music-video { display: none !important; }
 
-/* 1.2.0: harden the entire top-right shell, including the current nowPlayingWidgets wrapper used by recent Spotify builds. */
-body.meriotify-spotify-plus .Root__right-sidebar {
-	position: relative !important;
-	min-width: 0 !important;
-	border-radius: var(--mplus-panel-radius) !important;
-	background: linear-gradient(180deg, rgba(24,25,30,.86), rgba(12,13,16,.92)) !important;
-	border: 1px solid var(--mplus-line) !important;
-	box-shadow: var(--mplus-inner), var(--mplus-shadow) !important;
-	backdrop-filter: blur(22px) saturate(112%);
-	-webkit-backdrop-filter: blur(22px) saturate(112%);
-	isolation: isolate !important;
-}
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-nowPlayingWidgets,
-body.meriotify-spotify-plus .Root__right-sidebar [class*="nowPlayingView-nowPlayingWidgets"],
-body.meriotify-spotify-plus .Root__right-sidebar [data-testid="now-playing-view"],
-body.meriotify-spotify-plus .Root__right-sidebar [data-testid="now-playing-view"] > div {
-	min-width: 0 !important;
-	max-width: 100% !important;
-	background-color: transparent !important;
-	background-image: none !important;
-	box-shadow: none !important;
-}
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-nowPlayingWidgets::before,
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-nowPlayingWidgets::after,
-body.meriotify-spotify-plus .Root__right-sidebar [class*="nowPlayingView-nowPlayingWidgets"]::before,
-body.meriotify-spotify-plus .Root__right-sidebar [class*="nowPlayingView-nowPlayingWidgets"]::after {
-	background: transparent !important;
-	box-shadow: none !important;
-}
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-nowPlayingWidgets {
-	border: 0 !important;
-	border-radius: inherit !important;
-	overflow-x: clip !important;
-}
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-nowPlayingGrid {
-	background: transparent !important;
-	border: 0 !important;
-	box-shadow: none !important;
-	border-radius: inherit !important;
-}
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-container,
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-content,
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-gradient,
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-nowPlayingWidgets,
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-header,
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-headerContainer,
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-contextItem,
-body.meriotify-spotify-plus .Root__right-sidebar [data-testid="now-playing-view"] {
-	background-color: transparent !important;
-	background-image: none !important;
-	box-shadow: none !important;
-}
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-contextItem,
-body.meriotify-spotify-plus .Root__right-sidebar .main-nowPlayingView-contextItemInfo,
-body.meriotify-spotify-plus .Root__right-sidebar [data-testid="context-item-info-title"],
-body.meriotify-spotify-plus .Root__right-sidebar [data-testid="context-item-info-subtitles"] {
-	min-width: 0 !important;
-	max-width: 100% !important;
-	width: 100% !important;
-}
-body.meriotify-spotify-plus .Root__right-sidebar [data-testid="context-item-info-title"],
-body.meriotify-spotify-plus .Root__right-sidebar [data-testid="context-item-info-title"] *,
-body.meriotify-spotify-plus .Root__right-sidebar [data-testid="context-item-info-subtitles"],
-body.meriotify-spotify-plus .Root__right-sidebar [data-testid="context-item-info-subtitles"] * {
-	white-space: normal !important;
-	overflow: visible !important;
-	text-overflow: clip !important;
-	overflow-wrap: anywhere !important;
-}
-
-/* The top-right account/control area must inherit the Spotify+ shell instead of keeping Spotify's stock topbar slab. */
-body.meriotify-spotify-plus .main-topBar-container,
-body.meriotify-spotify-plus .main-topBar-topbarContent,
-body.meriotify-spotify-plus .main-topBar-topbarContentRight,
-body.meriotify-spotify-plus [data-testid="topbar-content-right"] {
-	background-color: transparent !important;
-	background-image: none !important;
-	box-shadow: none !important;
-}
-body.meriotify-spotify-plus .main-topBar-container::before,
-body.meriotify-spotify-plus .main-topBar-container::after,
-body.meriotify-spotify-plus .main-topBar-topbarContentRight::before,
-body.meriotify-spotify-plus .main-topBar-topbarContentRight::after {
-	background: transparent !important;
-	box-shadow: none !important;
-}
-
-/* Main canvas: less 'web page', more desktop workspace. */
-body.meriotify-spotify-plus .main-home-homeHeader,
-body.meriotify-spotify-plus .main-entityHeader-container,
-body.meriotify-spotify-plus .main-actionBar-ActionBar,
-body.meriotify-spotify-plus .main-topBar-background,
-body.meriotify-spotify-plus .main-actionBarBackground-background {
-	background: transparent !important;
-	box-shadow: none !important;
-}
-body.meriotify-spotify-plus .main-entityHeader-container {
-	border-radius: 0 0 28px 28px !important;
-}
-body.meriotify-spotify-plus .main-trackList-trackListRow,
-body.meriotify-spotify-plus [role="row"] {
-	border-radius: 14px !important;
-	border: 1px solid transparent !important;
-	background-clip: padding-box !important;
-}
-body.meriotify-spotify-plus .main-trackList-trackListRow:hover,
-body.meriotify-spotify-plus [role="row"]:hover {
-	background: rgba(255,255,255,.055) !important;
-	border-color: var(--mplus-line-soft) !important;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,.025) !important;
-}
-body.meriotify-spotify-plus .main-trackList-trackListRow[aria-selected="true"],
-body.meriotify-spotify-plus [role="row"][aria-selected="true"] {
-	background: rgba(255,255,255,.075) !important;
-	border-color: rgba(255,255,255,.10) !important;
-}
-
-/* Cards are real objects now: raised surface, artwork depth, cleaner play action. */
-body.meriotify-spotify-plus .main-card-card,
-body.meriotify-spotify-plus .main-card-cardContainer,
-body.meriotify-spotify-plus [data-testid="card-container"] {
-	position: relative !important;
-	border-radius: var(--mplus-card-radius) !important;
-	border: 1px solid rgba(255,255,255,.055) !important;
-	background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.018)) !important;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,.028), 0 9px 24px rgba(0,0,0,.08) !important;
-	overflow: hidden !important;
-}
-body.meriotify-spotify-plus .main-card-card:hover,
-body.meriotify-spotify-plus .main-card-cardContainer:hover,
-body.meriotify-spotify-plus [data-testid="card-container"]:hover {
-	background: linear-gradient(180deg, rgba(255,255,255,.080), rgba(255,255,255,.032)) !important;
-	border-color: rgba(255,255,255,.115) !important;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 16px 34px rgba(0,0,0,.18) !important;
-}
-body.meriotify-spotify-plus .main-cardImage-imageWrapper,
-body.meriotify-spotify-plus .main-cardImage-imageWrapper img,
-body.meriotify-spotify-plus .main-entityHeader-imageContainer,
-body.meriotify-spotify-plus [data-testid="cover-art-image"] {
-	border-radius: var(--mplus-cover-radius) !important;
-	overflow: hidden !important;
-}
-body.meriotify-spotify-plus .main-cardImage-imageWrapper {
-	box-shadow: 0 10px 24px rgba(0,0,0,.20) !important;
-}
-body.meriotify-spotify-plus [data-testid="artist-card"] .main-cardImage-imageWrapper,
-body.meriotify-spotify-plus [data-testid="artist-card"] img,
-body.meriotify-spotify-plus a[href^="/artist/"] .main-cardImage-imageWrapper,
-body.meriotify-spotify-plus a[href^="/artist/"] img { border-radius: 50% !important; }
-
-/* Chips/tabs/navigation look like a coherent Linux-style control set. */
-body.meriotify-spotify-plus .main-home-filterChipsSection button,
-body.meriotify-spotify-plus .main-yourLibraryX-filterArea button,
-body.meriotify-spotify-plus [data-encore-id="chip"],
-body.meriotify-spotify-plus [role="tab"] {
-	border-radius: 12px !important;
-	border: 1px solid rgba(255,255,255,.055) !important;
-	background: rgba(255,255,255,.045) !important;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,.025) !important;
-}
-body.meriotify-spotify-plus [role="tab"][aria-selected="true"],
-body.meriotify-spotify-plus [data-encore-id="chip"][aria-checked="true"] {
-	background: rgba(255,255,255,.12) !important;
-	border-color: rgba(255,255,255,.14) !important;
-}
-body.meriotify-spotify-plus button,
-body.meriotify-spotify-plus a { -webkit-tap-highlight-color: transparent; }
-
-/* Bottom player becomes a deliberate floating dock. Geometry remains Spotify-native. */
+/* Bottom player — one continuous bar, native controls preserved, subtle three-zone separation. */
 body.meriotify-spotify-plus .Root__now-playing-bar {
 	margin: 0 10px 10px !important;
 	padding: 0 !important;
@@ -1492,47 +1960,49 @@ body.meriotify-spotify-plus .Root__now-playing-bar {
 	box-shadow: none !important;
 	overflow: visible !important;
 }
+body.meriotify-spotify-plus .main-nowPlayingBar-container,
 body.meriotify-spotify-plus .main-nowPlayingBar-nowPlayingBar {
-	padding-inline: 14px !important;
-	border-radius: 22px !important;
-	background: linear-gradient(180deg, rgba(28,29,34,.90), rgba(12,13,16,.92)) !important;
+	min-height: 78px !important;
 	border: 1px solid var(--mplus-line) !important;
-	box-shadow: var(--mplus-inner), 0 18px 48px rgba(0,0,0,.38) !important;
-	backdrop-filter: blur(24px) saturate(116%);
-	-webkit-backdrop-filter: blur(24px) saturate(116%);
+	border-radius: 18px !important;
+	background: linear-gradient(180deg, #0c1114, #080c0f) !important;
+	box-shadow: 0 18px 42px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.025) !important;
+	backdrop-filter: none !important;
+}
+body.meriotify-spotify-plus .main-nowPlayingBar-nowPlayingBar {
+	padding: 8px 14px !important;
 }
 body.meriotify-spotify-plus .main-nowPlayingBar-left,
 body.meriotify-spotify-plus .main-nowPlayingBar-center,
 body.meriotify-spotify-plus .main-nowPlayingBar-right,
-body.meriotify-spotify-plus .main-nowPlayingWidget-nowPlaying,
-body.meriotify-spotify-plus .main-nowPlayingWidget-trackInfo { min-width: 0 !important; }
-body.meriotify-spotify-plus .main-nowPlayingBar-left,
-body.meriotify-spotify-plus .main-nowPlayingBar-center,
-body.meriotify-spotify-plus .main-nowPlayingBar-right {
-	margin: 10px 0 !important;
-	padding: 10px 14px !important;
-	border-radius: 18px !important;
-	background: linear-gradient(180deg, rgba(255,255,255,.052), rgba(255,255,255,.026)) !important;
-	border: 1px solid rgba(255,255,255,.08) !important;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 -1px 0 rgba(0,0,0,.16) !important;
-	min-height: 72px !important;
+body.meriotify-spotify-plus [class*="nowPlayingBar-left"],
+body.meriotify-spotify-plus [class*="nowPlayingBar-center"],
+body.meriotify-spotify-plus [class*="nowPlayingBar-right"] {
+	position: relative !important;
+	min-width: 0 !important;
+	background: transparent !important;
+	border: 0 !important;
+	box-shadow: none !important;
 }
-body.meriotify-spotify-plus .main-nowPlayingBar-left { margin-right: 8px !important; }
-body.meriotify-spotify-plus .main-nowPlayingBar-center {
-	margin-inline: 8px !important;
-	padding-inline: 18px !important;
-	background: linear-gradient(180deg, rgba(255,255,255,.068), rgba(255,255,255,.03)) !important;
+body.meriotify-spotify-plus .main-nowPlayingBar-left { padding-right: 18px !important; }
+body.meriotify-spotify-plus .main-nowPlayingBar-center { padding-inline: 18px !important; }
+body.meriotify-spotify-plus .main-nowPlayingBar-right { padding-left: 18px !important; justify-content: flex-end !important; }
+body.meriotify-spotify-plus .main-nowPlayingBar-left::after,
+body.meriotify-spotify-plus .main-nowPlayingBar-center::after {
+	content: "";
+	position: absolute;
+	top: 15%;
+	bottom: 15%;
+	right: 0;
+	width: 1px;
+	background: linear-gradient(180deg, transparent, rgba(255,255,255,.075), transparent);
+	pointer-events: none;
 }
-body.meriotify-spotify-plus .main-nowPlayingBar-right {
-	margin-left: 8px !important;
-	padding-inline: 16px !important;
-}
+body.meriotify-spotify-plus .main-coverSlotCollapsed-container .cover-art-image,
 body.meriotify-spotify-plus .main-nowPlayingWidget-coverArtContainer,
 body.meriotify-spotify-plus .main-nowPlayingWidget-coverArt,
-body.meriotify-spotify-plus .main-nowPlayingWidget-coverArt img,
-body.meriotify-spotify-plus .main-nowPlayingWidget-coverArt .cover-art-image {
-	border-radius: 11px !important;
-	box-shadow: 0 8px 20px rgba(0,0,0,.26) !important;
+body.meriotify-spotify-plus .main-nowPlayingWidget-coverArt img {
+	border-radius: 8px !important;
 }
 body.meriotify-spotify-plus .main-nowPlayingWidget-trackInfo a,
 body.meriotify-spotify-plus .main-nowPlayingWidget-trackInfo span {
@@ -1541,59 +2011,89 @@ body.meriotify-spotify-plus .main-nowPlayingWidget-trackInfo span {
 	text-overflow: ellipsis !important;
 	white-space: nowrap !important;
 }
-body.meriotify-spotify-plus .main-nowPlayingBar-right { justify-content: flex-end !important; }
-body.meriotify-spotify-plus .main-nowPlayingBar-left::after,
-body.meriotify-spotify-plus .main-nowPlayingBar-center::after {
-	content: "";
-	position: absolute;
-	right: -9px;
-	top: 12px;
-	bottom: 12px;
-	width: 1px;
-	background: linear-gradient(180deg, transparent, rgba(255,255,255,.12), transparent);
-	pointer-events: none;
+body.meriotify-spotify-plus .main-playPauseButton-button {
+	background: #f5f7f7 !important;
+	color: #050708 !important;
+	border-radius: 50% !important;
+	box-shadow: 0 0 0 1px rgba(255,255,255,.16), 0 7px 20px rgba(0,0,0,.30) !important;
 }
-body.meriotify-spotify-plus .main-nowPlayingBar-left,
-body.meriotify-spotify-plus .main-nowPlayingBar-center { position: relative !important; }
-body.meriotify-spotify-plus .progress-bar__bg {
+body.meriotify-spotify-plus .main-playPauseButton-button svg { width: 22px !important; height: 22px !important; }
+body.meriotify-spotify-plus .playback-bar .x-progressBar-fillColor,
+body.meriotify-spotify-plus .progress-bar__fg,
+body.meriotify-spotify-plus .volume-bar .progress-bar__fg {
+	background-color: var(--mplus-accent) !important;
+}
+body.meriotify-spotify-plus .progress-bar__bg,
+body.meriotify-spotify-plus .x-progressBar-progressBarBg {
+	background-color: rgba(255,255,255,.12) !important;
 	border-radius: 999px !important;
-	background: rgba(255,255,255,.10) !important;
 }
-body.meriotify-spotify-plus .progress-bar__fg { border-radius: 999px !important; }
+body.meriotify-spotify-plus .progress-bar__fg,
+body.meriotify-spotify-plus .progress-bar__bg,
+body.meriotify-spotify-plus .progress-bar__fg_wrapper { border-radius: 999px !important; }
+body.meriotify-spotify-plus .playback-bar .x-progressBar-fillColor,
+body.meriotify-spotify-plus .playback-bar .progress-bar__slider {
+	transition: none !important;
+}
+body.meriotify-spotify-plus .progress-bar--isDragging .x-progressBar-fillColor,
+body.meriotify-spotify-plus .progress-bar--isDragging .progress-bar__slider {
+	transition: none !important;
+}
 
-/* Cleaner scrollbars complete the desktop-theme feel. */
-body.meriotify-spotify-plus ::-webkit-scrollbar { width: 10px; height: 10px; }
+/* Context menus, dropdowns and modals share the same material. */
+body.meriotify-spotify-plus .main-contextMenu-menu,
+body.meriotify-spotify-plus .main-userWidget-dropDownMenu,
+body.meriotify-spotify-plus [role="menu"],
+body.meriotify-spotify-plus [data-encore-id="popover"] {
+	border: 1px solid var(--mplus-line-strong) !important;
+	border-radius: 12px !important;
+	background: #101519 !important;
+	box-shadow: 0 20px 50px rgba(0,0,0,.42) !important;
+}
+body.meriotify-spotify-plus .main-contextMenu-menuItemButton:not(.main-contextMenu-disabled):hover,
+body.meriotify-spotify-plus .main-contextMenu-menuItemButton[aria-expanded="true"] {
+	background: rgba(255,255,255,.055) !important;
+}
+body.meriotify-spotify-plus .main-contextMenu-menuItem:not(:first-child) > .main-contextMenu-dividerBefore:before {
+	border-bottom-color: rgba(255,255,255,.07) !important;
+}
+
+/* Scrollbars: thin and quiet; brighten on interaction. */
+body.meriotify-spotify-plus ::-webkit-scrollbar { width: 8px; height: 8px; }
 body.meriotify-spotify-plus ::-webkit-scrollbar-track { background: transparent; }
 body.meriotify-spotify-plus ::-webkit-scrollbar-thumb {
-	background: rgba(255,255,255,.12);
-	border: 3px solid transparent;
+	background: rgba(255,255,255,.13);
+	border: 2px solid transparent;
 	background-clip: padding-box;
 	border-radius: 999px;
 }
-body.meriotify-spotify-plus ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.22); background-clip: padding-box; }
+body.meriotify-spotify-plus ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.24); background-clip: padding-box; }
+body.meriotify-spotify-plus .os-theme-spotify.os-host-transition > .os-scrollbar-vertical > .os-scrollbar-track > .os-scrollbar-handle {
+	width: 5px !important;
+	border-radius: 999px !important;
+	background-color: rgba(255,255,255,.16) !important;
+}
+body.meriotify-spotify-plus .os-theme-spotify.os-host-transition > .os-scrollbar-vertical > .os-scrollbar-track { width: 5px !important; }
 
-/* Custom backgrounds stay continuous behind every shell. */
+/* Keep backgrounds continuous when the optional user background module is enabled. */
+body.meriotify-custom-background.meriotify-spotify-plus #main,
+body.meriotify-custom-background.meriotify-spotify-plus .Root,
 body.meriotify-custom-background.meriotify-spotify-plus .Root__top-container,
-body.meriotify-custom-background.meriotify-spotify-plus .Root__globalNav,
-body.meriotify-custom-background.meriotify-spotify-plus .Root__main-view,
 body.meriotify-custom-background.meriotify-spotify-plus .main-view-container,
 body.meriotify-custom-background.meriotify-spotify-plus .main-view-container__scroll-node,
 body.meriotify-custom-background.meriotify-spotify-plus .main-view-container__scroll-node-child,
-body.meriotify-custom-background.meriotify-spotify-plus .main-topBar-container,
-body.meriotify-custom-background.meriotify-spotify-plus .main-topBar-background,
-body.meriotify-custom-background.meriotify-spotify-plus .Root__nav-bar,
-body.meriotify-custom-background.meriotify-spotify-plus .Root__right-sidebar,
-body.meriotify-custom-background.meriotify-spotify-plus .Root__now-playing-bar,
-body.meriotify-custom-background.meriotify-spotify-plus .main-nowPlayingView-container,
-body.meriotify-custom-background.meriotify-spotify-plus .main-nowPlayingView-content,
-body.meriotify-custom-background.meriotify-spotify-plus .main-nowPlayingView-gradient,
-body.meriotify-custom-background.meriotify-spotify-plus .main-nowPlayingView-nowPlayingWidgets,
-body.meriotify-custom-background.meriotify-spotify-plus [class*="nowPlayingView-nowPlayingWidgets"] {
+body.meriotify-custom-background.meriotify-spotify-plus .main-topBar-background {
 	background-color: transparent !important;
 	background-image: none !important;
 }
+body.meriotify-custom-background.meriotify-spotify-plus .Root__main-view,
+body.meriotify-custom-background.meriotify-spotify-plus .Root__nav-bar,
+body.meriotify-custom-background.meriotify-spotify-plus .Root__right-sidebar,
+body.meriotify-custom-background.meriotify-spotify-plus .main-nowPlayingBar-container,
+body.meriotify-custom-background.meriotify-spotify-plus .main-nowPlayingBar-nowPlayingBar {
+	background-color: rgba(6,9,11,.82) !important;
+}
 
-/* 1.2.0 motion: CSS selectors remain as fallback, while runtime classes make hover work across Spotify DOM changes. */
 body.meriotify-spotify-plus-motion .main-card-card,
 body.meriotify-spotify-plus-motion .main-card-cardContainer,
 body.meriotify-spotify-plus-motion [data-testid="card-container"],
@@ -1607,56 +2107,800 @@ body.meriotify-spotify-plus-motion button,
 body.meriotify-spotify-plus-motion .meriotify-motion-hover,
 body.meriotify-spotify-plus-motion .meriotify-motion-press {
 	transition:
-		transform 230ms var(--mplus-ease),
-		background-color 180ms ease,
-		border-color 180ms ease,
-		box-shadow 230ms var(--mplus-ease),
-		filter 230ms var(--mplus-ease),
-		opacity 180ms ease !important;
+		transform 300ms cubic-bezier(.16,1,.3,1),
+		background-color 220ms ease,
+		border-color 220ms ease,
+		box-shadow 300ms cubic-bezier(.16,1,.3,1),
+		filter 240ms ease,
+		opacity 200ms ease !important;
 	transform-origin: center center;
-	will-change: transform;
+	backface-visibility: hidden;
 }
+
+/* Cards: clearly lift, brighten and pull the artwork toward you. */
 body.meriotify-spotify-plus-motion .main-card-card:hover,
 body.meriotify-spotify-plus-motion .main-card-cardContainer:hover,
 body.meriotify-spotify-plus-motion [data-testid="card-container"]:hover,
 body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="card"] {
-	transform: translate3d(0,-6px,0) scale(1.018) !important;
-	filter: brightness(1.055) !important;
+	transform: translate3d(0,-9px,0) scale(1.026) !important;
+	filter: brightness(1.085) saturate(1.06) !important;
+	box-shadow: 0 26px 58px rgba(0,0,0,.36), 0 0 0 1px rgba(255,255,255,.08) !important;
+	z-index: 4 !important;
 }
 body.meriotify-spotify-plus-motion .main-card-card:hover .main-cardImage-imageWrapper img,
 body.meriotify-spotify-plus-motion .main-card-cardContainer:hover .main-cardImage-imageWrapper img,
 body.meriotify-spotify-plus-motion [data-testid="card-container"]:hover .main-cardImage-imageWrapper img,
 body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="card"] img {
-	transform: scale(1.055) !important;
-	transition: transform 260ms var(--mplus-ease) !important;
+	transform: scale(1.075) !important;
+	filter: contrast(1.03) saturate(1.06) !important;
+	transition: transform 380ms cubic-bezier(.16,1,.3,1), filter 260ms ease !important;
 }
+
+/* Rows and navigation get a visible directional glide instead of a tiny nudge. */
 body.meriotify-spotify-plus-motion .main-trackList-trackListRow:hover,
 body.meriotify-spotify-plus-motion [role="row"]:hover,
 body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="row"] {
-	transform: translate3d(6px,0,0) !important;
+	transform: translate3d(8px,0,0) scale(1.004) !important;
+	filter: brightness(1.075) !important;
+	box-shadow: -5px 0 18px rgba(255,255,255,.025), 0 8px 22px rgba(0,0,0,.16) !important;
 }
 body.meriotify-spotify-plus-motion .main-yourLibraryX-listItem:hover,
 body.meriotify-spotify-plus-motion .main-yourLibraryX-navItem:hover,
 body.meriotify-spotify-plus-motion .main-navBar-navBarLink:hover,
 body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="nav"] {
-	transform: translate3d(5px,0,0) !important;
-}
-body.meriotify-spotify-plus-motion button:hover,
-body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="button"] {
-	transform: translate3d(0,-2px,0) scale(1.045) !important;
+	transform: translate3d(8px,0,0) scale(1.018) !important;
 	filter: brightness(1.10) !important;
 }
-body.meriotify-spotify-plus-motion .meriotify-motion-press,
-body.meriotify-spotify-plus-motion button:active {
-	transform: scale(.94) !important;
-	transition-duration: 90ms !important;
+
+/* Buttons have a much stronger magnetic hover and tactile press. */
+body.meriotify-spotify-plus-motion button:hover,
+body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="button"] {
+	transform: translate3d(0,-3px,0) scale(1.075) !important;
+	filter: brightness(1.16) saturate(1.08) !important;
+	box-shadow: 0 11px 24px rgba(0,0,0,.22), 0 0 0 1px rgba(255,255,255,.055) !important;
 }
-body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="card"],
-body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="row"],
-body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="nav"] {
+body.meriotify-spotify-plus-motion .meriotify-motion-press[data-meriotify-motion-kind="button"],
+body.meriotify-spotify-plus-motion button:active {
+	transform: translate3d(0,1px,0) scale(.90) !important;
+	filter: brightness(.94) !important;
+	transition-duration: 72ms !important;
+}
+body.meriotify-spotify-plus-motion .meriotify-motion-press[data-meriotify-motion-kind="card"] {
+	transform: translate3d(0,-2px,0) scale(.975) !important;
+	transition-duration: 86ms !important;
+}
+body.meriotify-spotify-plus-motion .meriotify-motion-press[data-meriotify-motion-kind="row"] {
+	transform: translate3d(3px,0,0) scale(.985) !important;
+	transition-duration: 76ms !important;
+}
+body.meriotify-spotify-plus-motion .meriotify-motion-press[data-meriotify-motion-kind="nav"] {
+	transform: translate3d(3px,0,0) scale(.955) !important;
+	transition-duration: 76ms !important;
+}
+
+/* Release overshoot: the control springs past rest and settles. */
+body.meriotify-spotify-plus-motion .meriotify-motion-pop[data-meriotify-motion-kind="button"] { animation: meriotify-motion-pop-button 430ms cubic-bezier(.16,1,.3,1) both !important; }
+body.meriotify-spotify-plus-motion .meriotify-motion-pop[data-meriotify-motion-kind="card"] { animation: meriotify-motion-pop-card 440ms cubic-bezier(.16,1,.3,1) both !important; }
+body.meriotify-spotify-plus-motion .meriotify-motion-pop[data-meriotify-motion-kind="row"],
+body.meriotify-spotify-plus-motion .meriotify-motion-pop[data-meriotify-motion-kind="nav"] { animation: meriotify-motion-pop-row 400ms cubic-bezier(.16,1,.3,1) both !important; }
+@keyframes meriotify-motion-pop-button {
+	0% { transform: scale(.90); }
+	45% { transform: translate3d(0,-4px,0) scale(1.105); }
+	72% { transform: translate3d(0,-2px,0) scale(1.045); }
+	100% { transform: translate3d(0,-3px,0) scale(1.075); }
+}
+@keyframes meriotify-motion-pop-card {
+	0% { transform: translate3d(0,-2px,0) scale(.975); }
+	48% { transform: translate3d(0,-11px,0) scale(1.038); }
+	100% { transform: translate3d(0,-9px,0) scale(1.026); }
+}
+@keyframes meriotify-motion-pop-row {
+	0% { transform: translate3d(2px,0,0) scale(.98); }
+	48% { transform: translate3d(10px,0,0) scale(1.012); }
+	100% { transform: translate3d(8px,0,0) scale(1.004); }
+}
+
+/* One-shot hover sheen: fixed overlay, so it cannot disturb Spotify layout. */
+.meriotify-motion-sweep {
+	position: fixed;
+	z-index: 2147483000;
+	pointer-events: none;
+	overflow: hidden;
+	isolation: isolate;
+	animation: meriotify-motion-sweep-shell 520ms ease-out both;
+}
+.meriotify-motion-sweep::before {
+	content: "";
+	position: absolute;
+	top: -35%;
+	bottom: -35%;
+	left: -48%;
+	width: 38%;
+	transform: skewX(-18deg);
+	background: linear-gradient(90deg, transparent, rgba(255,255,255,.20), rgba(255,255,255,.055), transparent);
+	filter: blur(.2px);
+	animation: meriotify-motion-sheen 520ms cubic-bezier(.2,.8,.2,1) both;
+}
+.meriotify-motion-sweep-button::before { background: linear-gradient(90deg, transparent, rgba(255,255,255,.30), rgba(255,255,255,.09), transparent); }
+@keyframes meriotify-motion-sweep-shell {
+	0% { opacity: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,0); }
+	22% { opacity: 1; box-shadow: inset 0 0 0 1px rgba(255,255,255,.075); }
+	100% { opacity: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,0); }
+}
+@keyframes meriotify-motion-sheen {
+	0% { left: -48%; opacity: 0; }
+	18% { opacity: 1; }
+	100% { left: 118%; opacity: 0; }
+}
+
+/* Click burst: two expanding rings + central flash. */
+.meriotify-motion-burst {
+	position: fixed;
+	z-index: 2147483001;
+	width: 12px;
+	height: 12px;
+	margin: -6px 0 0 -6px;
+	border-radius: 50%;
+	pointer-events: none;
+	background: rgba(255,255,255,.80);
+	box-shadow: 0 0 0 0 rgba(255,255,255,.30), 0 0 22px rgba(255,255,255,.30);
+	animation: meriotify-motion-burst-core 620ms cubic-bezier(.16,1,.3,1) both;
+}
+.meriotify-motion-burst::before,
+.meriotify-motion-burst::after {
+	content: "";
+	position: absolute;
+	inset: 50%;
+	width: 10px;
+	height: 10px;
+	margin: -5px;
+	border: 1.5px solid rgba(255,255,255,.72);
+	border-radius: 50%;
+	animation: meriotify-motion-ring 620ms cubic-bezier(.12,.75,.18,1) both;
+}
+.meriotify-motion-burst::after { animation-delay: 70ms; border-color: rgba(255,255,255,.34); }
+.meriotify-motion-burst-card { width: 15px; height: 15px; margin: -7.5px 0 0 -7.5px; }
+@keyframes meriotify-motion-burst-core {
+	0% { transform: scale(.3); opacity: 0; }
+	12% { opacity: 1; }
+	42% { transform: scale(1.18); opacity: .86; }
+	100% { transform: scale(2.2); opacity: 0; }
+}
+@keyframes meriotify-motion-ring {
+	0% { transform: scale(.35); opacity: .95; }
+	100% { transform: scale(7); opacity: 0; }
+}
+
+
+/* Spotify+ / Adaptive Album Theme compatibility.
+   When both features are enabled, the cover-derived color layer remains visible through
+   the graphite shell instead of being hidden by opaque Spotify+ surfaces. */
+body.meriotify-spotify-plus.meriotify-adaptive-theme {
+	--mplus-bg: rgba(5,7,8,.68);
+	--mplus-panel: rgba(9,13,16,.72);
+	--mplus-panel-2: rgba(13,18,22,.72);
+	--mplus-panel-3: rgba(17,23,27,.74);
+	--mplus-hover: rgba(var(--meriotify-primary-rgb), .14);
+	--mplus-line: rgba(255,255,255,.075);
+	--mplus-line-strong: rgba(255,255,255,.13);
+
+	--spice-main: rgba(5,7,8,.68);
+	--spice-sidebar: rgba(9,13,16,.74);
+	--spice-player: rgba(9,13,16,.74);
+	--spice-card: rgba(13,18,22,.70);
+	--spice-main-secondary: rgba(17,23,27,.72);
+
+	background: transparent !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme #main,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .Root,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .Root__top-container {
+	background: transparent !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .Root__main-view {
+	background:
+		linear-gradient(180deg, rgba(var(--meriotify-primary-rgb), .055), transparent 28%),
+		rgba(5,7,8,.56) !important;
+	backdrop-filter: blur(10px) saturate(1.04) !important;
+	-webkit-backdrop-filter: blur(10px) saturate(1.04) !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .Root__nav-bar,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .Root__right-sidebar {
+	background:
+		linear-gradient(180deg, rgba(var(--meriotify-primary-rgb), .075), rgba(var(--meriotify-secondary-rgb), .035) 42%, transparent 100%),
+		rgba(7,10,12,.68) !important;
+	backdrop-filter: blur(18px) saturate(1.08) !important;
+	-webkit-backdrop-filter: blur(18px) saturate(1.08) !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-card-card,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-card-cardContainer,
+body.meriotify-spotify-plus.meriotify-adaptive-theme [data-testid="card-container"],
+body.meriotify-spotify-plus.meriotify-adaptive-theme .view-homeShortcutsGrid-shortcut {
+	background:
+		linear-gradient(145deg, rgba(var(--meriotify-primary-rgb), .085), rgba(var(--meriotify-secondary-rgb), .035)),
+		rgba(12,17,20,.66) !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-card-card:hover,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-card-cardContainer:hover,
+body.meriotify-spotify-plus.meriotify-adaptive-theme [data-testid="card-container"]:hover,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .view-homeShortcutsGrid-shortcut:hover {
+	background:
+		linear-gradient(145deg, rgba(var(--meriotify-primary-rgb), .15), rgba(var(--meriotify-secondary-rgb), .075)),
+		rgba(16,22,26,.78) !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-trackList-trackListRow:hover,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-trackList-trackListRow.main-trackList-selected {
+	background: rgba(var(--meriotify-primary-rgb), .10) !important;
+}
+
+/* Three distinct playback zones, preserving Spotify's native layout. */
+body.meriotify-spotify-plus .main-nowPlayingBar-nowPlayingBar {
+	gap: 9px !important;
+	padding: 6px !important;
+}
+body.meriotify-spotify-plus .main-nowPlayingBar-left,
+body.meriotify-spotify-plus .main-nowPlayingBar-center,
+body.meriotify-spotify-plus .main-nowPlayingBar-right,
+body.meriotify-spotify-plus [class*="nowPlayingBar-left"],
+body.meriotify-spotify-plus [class*="nowPlayingBar-center"],
+body.meriotify-spotify-plus [class*="nowPlayingBar-right"] {
+	min-height: 66px !important;
+	margin: 0 !important;
+	padding: 9px 14px !important;
+	border: 1px solid rgba(255,255,255,.065) !important;
+	border-radius: 13px !important;
+	background: linear-gradient(180deg, rgba(255,255,255,.040), rgba(255,255,255,.018)) !important;
+	box-shadow: inset 0 1px 0 rgba(255,255,255,.025), 0 6px 18px rgba(0,0,0,.10) !important;
+}
+body.meriotify-spotify-plus .main-nowPlayingBar-center,
+body.meriotify-spotify-plus [class*="nowPlayingBar-center"] {
+	padding-inline: 18px !important;
+	background: linear-gradient(180deg, rgba(255,255,255,.052), rgba(255,255,255,.022)) !important;
+}
+body.meriotify-spotify-plus .main-nowPlayingBar-right,
+body.meriotify-spotify-plus [class*="nowPlayingBar-right"] {
+	justify-content: flex-end !important;
+}
+body.meriotify-spotify-plus .main-nowPlayingBar-left::after,
+body.meriotify-spotify-plus .main-nowPlayingBar-center::after,
+body.meriotify-spotify-plus [class*="nowPlayingBar-left"]::after,
+body.meriotify-spotify-plus [class*="nowPlayingBar-center"]::after {
+	display: none !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-container,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-nowPlayingBar {
+	background:
+		linear-gradient(180deg, rgba(var(--meriotify-primary-rgb), .055), rgba(var(--meriotify-secondary-rgb), .022)),
+		rgba(7,11,13,.68) !important;
+	backdrop-filter: blur(18px) saturate(1.08) !important;
+	-webkit-backdrop-filter: blur(18px) saturate(1.08) !important;
+}
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-left,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-center,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-right,
+body.meriotify-spotify-plus.meriotify-adaptive-theme [class*="nowPlayingBar-left"],
+body.meriotify-spotify-plus.meriotify-adaptive-theme [class*="nowPlayingBar-center"],
+body.meriotify-spotify-plus.meriotify-adaptive-theme [class*="nowPlayingBar-right"] {
+	border-color: rgba(var(--meriotify-primary-rgb), .14) !important;
+	background:
+		linear-gradient(145deg, rgba(var(--meriotify-primary-rgb), .09), rgba(var(--meriotify-secondary-rgb), .035)),
+		rgba(11,16,19,.66) !important;
+}
+
+
+/* Spotify+ ULTRA — one-toggle premium visual system. */
+body.meriotify-spotify-plus {
+	--mplus-art: var(--meriotify-track-art-url, none);
+	--mplus-glow: rgba(var(--mplus-accent-rgb), .30);
+	--mplus-glow-soft: rgba(var(--mplus-accent-rgb), .12);
+}
+
+/* Live cover atmosphere across the center pane. */
+body.meriotify-spotify-plus .Root__main-view {
+	position: relative !important;
+	isolation: isolate !important;
+}
+body.meriotify-spotify-plus .Root__main-view::before {
+	content: "";
+	position: absolute;
+	z-index: -2;
+	inset: -90px;
+	pointer-events: none;
+	background:
+		radial-gradient(70% 54% at 74% 4%, rgba(var(--mplus-accent-rgb), .25), transparent 68%),
+		linear-gradient(180deg, rgba(5,7,8,.20), rgba(5,7,8,.96) 54%),
+		var(--mplus-art);
+	background-size: cover;
+	background-position: center;
+	filter: blur(64px) saturate(1.45) contrast(1.05);
+	opacity: .28;
+	transform: scale(1.18);
+	animation: meriotify-ultra-ambient 17s ease-in-out infinite alternate;
+}
+body.meriotify-spotify-plus .Root__main-view::after {
+	content: "";
+	position: absolute;
+	z-index: -1;
+	inset: 0;
+	pointer-events: none;
+	background:
+		radial-gradient(52% 34% at 50% -8%, rgba(255,255,255,.055), transparent 72%),
+		linear-gradient(180deg, rgba(4,7,9,.10), rgba(4,7,9,.55) 52%, rgba(4,7,9,.91));
+}
+@keyframes meriotify-ultra-ambient {
+	0% { transform: scale(1.16) translate3d(-1.2%, -1%, 0); opacity: .22; }
+	50% { opacity: .31; }
+	100% { transform: scale(1.24) translate3d(1.7%, 1.3%, 0); opacity: .27; }
+}
+
+/* Hero becomes cinematic rather than a flat Spotify header. */
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero {
+	position: relative !important;
+	overflow: hidden !important;
+	min-height: clamp(290px, 35vh, 430px) !important;
+	border-radius: 0 0 26px 26px !important;
+	box-shadow: inset 0 -1px 0 rgba(255,255,255,.05), 0 30px 70px rgba(0,0,0,.22) !important;
+}
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero::before {
+	content: "";
+	position: absolute;
+	inset: -54px;
+	z-index: 0;
+	background:
+		linear-gradient(90deg, rgba(5,7,8,.98) 0%, rgba(5,7,8,.76) 39%, rgba(5,7,8,.18) 73%, rgba(5,7,8,.42) 100%),
+		linear-gradient(0deg, rgba(5,7,8,.92) 0%, transparent 62%),
+		var(--meriotify-hero-url);
+	background-size: cover;
+	background-position: center 38%;
+	filter: saturate(1.28) contrast(1.06);
+	transform: scale(1.065);
+	animation: meriotify-ultra-hero-drift 14s ease-in-out infinite alternate;
+}
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	pointer-events: none;
+	background:
+		radial-gradient(42% 62% at 83% 38%, rgba(var(--mplus-accent-rgb), .20), transparent 72%),
+		linear-gradient(110deg, transparent 42%, rgba(255,255,255,.045) 50%, transparent 58%);
+	background-size: 100% 100%, 230% 100%;
+	animation: meriotify-ultra-hero-sheen 7.5s ease-in-out infinite;
+}
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero > * {
 	position: relative;
 	z-index: 2;
 }
+@keyframes meriotify-ultra-hero-drift {
+	from { transform: scale(1.065) translate3d(-.7%, -.4%, 0); }
+	to { transform: scale(1.105) translate3d(1.3%, .8%, 0); }
+}
+@keyframes meriotify-ultra-hero-sheen {
+	0%, 28% { background-position: center, 155% 0; opacity: .55; }
+	55% { background-position: center, -35% 0; opacity: 1; }
+	100% { background-position: center, -35% 0; opacity: .55; }
+}
+
+/* Artwork itself floats with layered depth. */
+body.meriotify-spotify-plus .main-entityHeader-imageContainer,
+body.meriotify-spotify-plus .main-entityHeader-image,
+body.meriotify-spotify-plus .main-nowPlayingView-coverArt,
+body.meriotify-spotify-plus [data-testid="cover-art-image"] {
+	transform-style: preserve-3d;
+	will-change: transform, filter;
+}
+body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="cover"] {
+	transform:
+		perspective(850px)
+		rotateX(var(--mplus-rx, 0deg))
+		rotateY(var(--mplus-ry, 0deg))
+		translate3d(0,-8px,24px)
+		scale(1.035) !important;
+	filter: saturate(1.16) brightness(1.06) drop-shadow(0 24px 34px rgba(0,0,0,.42)) !important;
+}
+
+/* 3D card tilt driven by one throttled global pointer listener. */
+body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="card"] {
+	transform:
+		perspective(900px)
+		rotateX(var(--mplus-rx, 0deg))
+		rotateY(var(--mplus-ry, 0deg))
+		translate3d(0,-10px,16px)
+		scale(1.028) !important;
+	box-shadow:
+		0 30px 68px rgba(0,0,0,.44),
+		0 0 0 1px rgba(255,255,255,.095),
+		0 0 36px var(--mplus-glow-soft) !important;
+}
+
+/* Spotlight follows pointer but lives outside Spotify layout. */
+.meriotify-motion-spotlight {
+	position: fixed;
+	z-index: 2147482998;
+	pointer-events: none;
+	overflow: hidden;
+	opacity: 1;
+	background:
+		radial-gradient(
+			190px circle at var(--mplus-mx, 50%) var(--mplus-my, 50%),
+			rgba(255,255,255,.115),
+			rgba(var(--mplus-accent-rgb), .055) 34%,
+			transparent 70%
+		);
+	box-shadow:
+		inset 0 0 0 1px rgba(255,255,255,.06),
+		0 0 44px rgba(var(--mplus-accent-rgb), .055);
+	mix-blend-mode: screen;
+	transition: opacity 120ms ease;
+}
+
+/* Right Now Playing is an artwork-backed glass surface. */
+body.meriotify-spotify-plus .Root__right-sidebar {
+	position: relative !important;
+	overflow: hidden !important;
+}
+body.meriotify-spotify-plus .Root__right-sidebar::before {
+	content: "";
+	position: absolute;
+	inset: -36px;
+	z-index: 0;
+	pointer-events: none;
+	background:
+		linear-gradient(180deg, rgba(5,8,10,.30), rgba(5,8,10,.90) 62%, #06090b),
+		var(--meriotify-nowplaying-url, var(--mplus-art));
+	background-size: cover;
+	background-position: center;
+	filter: blur(30px) saturate(1.35);
+	opacity: .32;
+	transform: scale(1.15);
+	animation: meriotify-ultra-nowplaying 12s ease-in-out infinite alternate;
+}
+body.meriotify-spotify-plus .Root__right-sidebar > * {
+	position: relative;
+	z-index: 1;
+}
+@keyframes meriotify-ultra-nowplaying {
+	from { transform: scale(1.14) translate3d(-1%,0,0); }
+	to { transform: scale(1.20) translate3d(1.5%,1%,0); }
+}
+
+/* Current-track row gets a subtle living accent instead of a flat selection. */
+body.meriotify-spotify-plus .main-trackList-trackListRow[aria-selected="true"],
+body.meriotify-spotify-plus .main-trackList-trackListRow:has(.main-trackList-playingIcon) {
+	background:
+		linear-gradient(90deg, rgba(var(--mplus-accent-rgb), .16), rgba(var(--mplus-accent-rgb), .035) 46%, transparent 78%) !important;
+	box-shadow: inset 3px 0 0 var(--mplus-accent), 0 0 28px rgba(var(--mplus-accent-rgb), .055) !important;
+	animation: meriotify-ultra-current-row 3.4s ease-in-out infinite;
+}
+@keyframes meriotify-ultra-current-row {
+	0%, 100% { filter: brightness(1); }
+	50% { filter: brightness(1.075); }
+}
+
+/* Bottom player feels like a floating control deck. */
+body.meriotify-spotify-plus .main-nowPlayingBar-container,
+body.meriotify-spotify-plus .main-nowPlayingBar-nowPlayingBar {
+	box-shadow:
+		0 -1px 0 rgba(255,255,255,.045),
+		0 -22px 60px rgba(0,0,0,.30),
+		0 0 34px rgba(var(--mplus-accent-rgb), .035) !important;
+	backdrop-filter: blur(18px) saturate(1.10) !important;
+}
+body.meriotify-spotify-plus .progress-bar__fg,
+body.meriotify-spotify-plus .playback-progressbar .progress-bar__fg {
+	box-shadow: 0 0 10px rgba(var(--mplus-accent-rgb), .52), 0 0 22px rgba(var(--mplus-accent-rgb), .22) !important;
+}
+
+/* Page change feels like a premium native transition. */
+body.meriotify-spotify-plus-motion .meriotify-plus-page-enter {
+	animation: meriotify-ultra-page-in 700ms cubic-bezier(.16,1,.3,1) both !important;
+}
+@keyframes meriotify-ultra-page-in {
+	0% { opacity: .20; transform: translate3d(0,15px,0) scale(.992); }
+	42% { opacity: 1; }
+	100% { opacity: 1; transform: translate3d(0,0,0) scale(1); }
+}
+
+/* Hover sweep is brighter, wider and accent-tinted. */
+.meriotify-motion-sweep::before {
+	width: 48% !important;
+	background:
+		linear-gradient(
+			90deg,
+			transparent,
+			rgba(var(--mplus-accent-rgb), .08),
+			rgba(255,255,255,.30),
+			rgba(var(--mplus-accent-rgb), .11),
+			transparent
+		) !important;
+	filter: blur(.4px) saturate(1.35) !important;
+}
+
+/* Click = shockwave + accent flash + sparks. */
+.meriotify-motion-burst {
+	background: rgba(255,255,255,.94) !important;
+	box-shadow:
+		0 0 14px rgba(255,255,255,.72),
+		0 0 32px rgba(var(--mplus-accent-rgb), .72),
+		0 0 0 0 rgba(var(--mplus-accent-rgb), .34) !important;
+}
+.meriotify-motion-burst::before {
+	border-color: rgba(255,255,255,.85) !important;
+}
+.meriotify-motion-burst::after {
+	border-color: rgba(var(--mplus-accent-rgb), .72) !important;
+}
+.meriotify-motion-spark {
+	position: fixed;
+	z-index: 2147483002;
+	width: 4px;
+	height: 4px;
+	margin: -2px 0 0 -2px;
+	border-radius: 999px;
+	pointer-events: none;
+	background: rgba(255,255,255,.96);
+	box-shadow: 0 0 8px rgba(255,255,255,.7), 0 0 14px rgba(var(--mplus-accent-rgb), .7);
+	animation: meriotify-ultra-spark 650ms cubic-bezier(.12,.78,.18,1) var(--mplus-spark-delay, 0ms) both;
+}
+@keyframes meriotify-ultra-spark {
+	0% { opacity: 0; transform: translate3d(0,0,0) scale(.5); }
+	12% { opacity: 1; }
+	72% { opacity: .72; }
+	100% {
+		opacity: 0;
+		transform: translate3d(var(--mplus-spark-x), var(--mplus-spark-y), 0) scale(.1);
+	}
+}
+
+/* Buttons get stronger premium glass/magnetic feedback. */
+body.meriotify-spotify-plus-motion .meriotify-motion-hover[data-meriotify-motion-kind="button"] {
+	transform:
+		perspective(600px)
+		rotateX(calc(var(--mplus-rx, 0deg) * .35))
+		rotateY(calc(var(--mplus-ry, 0deg) * .35))
+		translate3d(0,-4px,14px)
+		scale(1.085) !important;
+	box-shadow:
+		0 14px 30px rgba(0,0,0,.27),
+		0 0 0 1px rgba(255,255,255,.075),
+		0 0 22px rgba(var(--mplus-accent-rgb), .09) !important;
+}
+
+/* Cover/player micro-motion, deliberately slow and GPU-only. */
+body.meriotify-spotify-plus-motion .main-nowPlayingBar-left img,
+body.meriotify-spotify-plus-motion .main-nowPlayingView-coverArt img {
+	transition: transform 520ms cubic-bezier(.16,1,.3,1), filter 420ms ease !important;
+}
+body.meriotify-spotify-plus-motion .main-nowPlayingBar-left:hover img {
+	transform: scale(1.045) rotate(-.6deg) !important;
+	filter: saturate(1.12) brightness(1.04) !important;
+}
+
+
+
+/* Spotify+ Ultra Optimized: same premium look, no permanent full-surface animation. */
+body.meriotify-spotify-plus .Root__main-view::before,
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero::before,
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero::after,
+body.meriotify-spotify-plus .Root__right-sidebar::before,
+body.meriotify-spotify-plus .main-trackList-trackListRow[aria-selected="true"],
+body.meriotify-spotify-plus .main-trackList-trackListRow:has(.main-trackList-playingIcon) {
+	animation: none !important;
+}
+
+/* Large background filters were the main idle repaint cost. */
+body.meriotify-spotify-plus .Root__main-view::before {
+	filter: blur(32px) saturate(1.24) contrast(1.02) !important;
+	opacity: .20 !important;
+	transform: scale(1.10) !important;
+}
+body.meriotify-spotify-plus .Root__right-sidebar::before {
+	filter: blur(18px) saturate(1.20) !important;
+	opacity: .25 !important;
+	transform: scale(1.08) !important;
+}
+body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero::before {
+	filter: saturate(1.17) contrast(1.03) !important;
+	transform: scale(1.035) !important;
+}
+
+/* Keep the floating deck look without continuously recompositing a huge backdrop blur. */
+body.meriotify-spotify-plus .main-nowPlayingBar-container,
+body.meriotify-spotify-plus .main-nowPlayingBar-nowPlayingBar {
+	backdrop-filter: none !important;
+	background: linear-gradient(180deg, rgba(17,20,22,.96), rgba(7,9,10,.985)) !important;
+}
+
+/* Finite event-driven effects can still be fancy. */
+body.meriotify-spotify-plus-motion .meriotify-plus-page-enter {
+	animation-duration: 460ms !important;
+}
+.meriotify-motion-spark {
+	animation-duration: 480ms !important;
+}
+.meriotify-motion-burst {
+	animation-duration: 420ms !important;
+}
+
+/* Only active targets get compositor hints. */
+body.meriotify-spotify-plus-motion .meriotify-motion-hover,
+body.meriotify-spotify-plus-motion .meriotify-motion-press,
+body.meriotify-spotify-plus-motion .meriotify-motion-pop {
+	will-change: transform !important;
+}
+
+
+/* Meriotify 1.3 final polish — separated player zones + softer geometry. */
+body.meriotify-spotify-plus {
+	--mplus-radius-shell: 22px;
+	--mplus-radius-card: 16px;
+}
+
+/* Make the bottom player genuinely three separate floating blocks. */
+body.meriotify-spotify-plus .Root__now-playing-bar {
+	margin: 0 10px 10px !important;
+	padding: 0 !important;
+	background: transparent !important;
+	border: 0 !important;
+	box-shadow: none !important;
+	overflow: visible !important;
+}
+
+body.meriotify-spotify-plus .main-nowPlayingBar-container,
+body.meriotify-spotify-plus .main-nowPlayingBar-nowPlayingBar {
+	background: transparent !important;
+	background-image: none !important;
+	border: 0 !important;
+	border-radius: 0 !important;
+	box-shadow: none !important;
+	backdrop-filter: none !important;
+	-webkit-backdrop-filter: none !important;
+	overflow: visible !important;
+}
+
+body.meriotify-spotify-plus .main-nowPlayingBar-nowPlayingBar {
+	gap: 10px !important;
+	padding: 0 !important;
+	min-height: 78px !important;
+}
+
+body.meriotify-spotify-plus .main-nowPlayingBar-left,
+body.meriotify-spotify-plus .main-nowPlayingBar-center,
+body.meriotify-spotify-plus .main-nowPlayingBar-right,
+body.meriotify-spotify-plus [class*="nowPlayingBar-left"],
+body.meriotify-spotify-plus [class*="nowPlayingBar-center"],
+body.meriotify-spotify-plus [class*="nowPlayingBar-right"] {
+	position: relative !important;
+	min-width: 0 !important;
+	min-height: 74px !important;
+	margin: 0 !important;
+	padding: 9px 14px !important;
+	border: 1px solid rgba(255,255,255,.075) !important;
+	border-radius: 18px !important;
+	background:
+		linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.014)),
+		#090d10 !important;
+	box-shadow:
+		inset 0 1px 0 rgba(255,255,255,.035),
+		0 12px 30px rgba(0,0,0,.25) !important;
+	overflow: visible !important;
+}
+
+body.meriotify-spotify-plus .main-nowPlayingBar-center,
+body.meriotify-spotify-plus [class*="nowPlayingBar-center"] {
+	padding-inline: 18px !important;
+	border-color: rgba(255,255,255,.09) !important;
+	background:
+		linear-gradient(180deg, rgba(255,255,255,.058), rgba(255,255,255,.018)),
+		#0a0f12 !important;
+}
+
+body.meriotify-spotify-plus .main-nowPlayingBar-right,
+body.meriotify-spotify-plus [class*="nowPlayingBar-right"] {
+	justify-content: flex-end !important;
+}
+
+body.meriotify-spotify-plus .main-nowPlayingBar-left::after,
+body.meriotify-spotify-plus .main-nowPlayingBar-center::after,
+body.meriotify-spotify-plus [class*="nowPlayingBar-left"]::after,
+body.meriotify-spotify-plus [class*="nowPlayingBar-center"]::after {
+	display: none !important;
+}
+
+/* Artwork colors tint each block without joining them into one slab. */
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-container,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-nowPlayingBar {
+	background: transparent !important;
+	background-image: none !important;
+	backdrop-filter: none !important;
+	-webkit-backdrop-filter: none !important;
+}
+
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-left,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-center,
+body.meriotify-spotify-plus.meriotify-adaptive-theme .main-nowPlayingBar-right,
+body.meriotify-spotify-plus.meriotify-adaptive-theme [class*="nowPlayingBar-left"],
+body.meriotify-spotify-plus.meriotify-adaptive-theme [class*="nowPlayingBar-center"],
+body.meriotify-spotify-plus.meriotify-adaptive-theme [class*="nowPlayingBar-right"] {
+	border-color: rgba(var(--meriotify-primary-rgb), .18) !important;
+	background:
+		linear-gradient(145deg, rgba(var(--meriotify-primary-rgb), .095), rgba(var(--meriotify-secondary-rgb), .035)),
+		#090d10 !important;
+}
+
+/* A little more rounding throughout Spotify+, without making every element a pill. */
+body.meriotify-spotify-plus .Root__main-view,
+body.meriotify-spotify-plus .Root__nav-bar,
+body.meriotify-spotify-plus .Root__right-sidebar {
+	border-radius: 22px !important;
+}
+
+body.meriotify-spotify-plus .main-card-card,
+body.meriotify-spotify-plus .main-card-cardContainer,
+body.meriotify-spotify-plus [data-testid="card-container"],
+body.meriotify-spotify-plus .view-homeShortcutsGrid-shortcut {
+	border-radius: 16px !important;
+}
+
+body.meriotify-spotify-plus .main-trackList-trackListRow,
+body.meriotify-spotify-plus .main-yourLibraryX-listItem,
+body.meriotify-spotify-plus .main-yourLibraryX-navItem,
+body.meriotify-spotify-plus .main-yourLibraryX-navLink,
+body.meriotify-spotify-plus .main-navBar-navBarLink,
+body.meriotify-spotify-plus .main-rootlist-rootlistItem,
+body.meriotify-spotify-plus .Root__nav-bar [role="listitem"],
+body.meriotify-spotify-plus .Root__nav-bar [role="treeitem"] {
+	border-radius: 12px !important;
+}
+
+body.meriotify-spotify-plus .main-contextMenu-menu,
+body.meriotify-spotify-plus .main-userWidget-dropDownMenu,
+body.meriotify-spotify-plus [role="menu"],
+body.meriotify-spotify-plus [data-encore-id="popover"],
+body.meriotify-spotify-plus [role="dialog"] {
+	border-radius: 16px !important;
+}
+
+body.meriotify-spotify-plus .main-coverSlotCollapsed-container .cover-art-image,
+body.meriotify-spotify-plus .main-nowPlayingWidget-coverArtContainer,
+body.meriotify-spotify-plus .main-nowPlayingWidget-coverArt,
+body.meriotify-spotify-plus .main-nowPlayingWidget-coverArt img,
+body.meriotify-spotify-plus .main-entityHeader-imageContainer,
+body.meriotify-spotify-plus .main-entityHeader-image {
+	border-radius: 12px !important;
+}
+
+/* Keep native circular/pill controls circular where that is intentional. */
+body.meriotify-spotify-plus .main-playPauseButton-button {
+	border-radius: 999px !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	body.meriotify-spotify-plus-motion .meriotify-motion-hover,
+	body.meriotify-spotify-plus-motion .meriotify-motion-press,
+	body.meriotify-spotify-plus-motion .meriotify-motion-pop {
+		animation: none !important;
+		transition-duration: 1ms !important;
+		transform: none !important;
+	}
+	.meriotify-motion-sweep,
+	.meriotify-motion-burst,
+	.meriotify-motion-spark,
+	.meriotify-motion-spotlight {
+		display: none !important;
+	}
+	body.meriotify-spotify-plus .Root__main-view::before,
+	body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero::before,
+	body.meriotify-spotify-plus .main-entityHeader-container.meriotify-plus-hero::after,
+	body.meriotify-spotify-plus .Root__right-sidebar::before,
+	body.meriotify-spotify-plus .main-trackList-trackListRow[aria-selected="true"],
+	body.meriotify-spotify-plus .main-trackList-trackListRow:has(.main-trackList-playingIcon),
+	body.meriotify-spotify-plus-motion .meriotify-plus-page-enter {
+		animation: none !important;
+	}
+}
+
 `;
 		document.head.append(style);
 	}

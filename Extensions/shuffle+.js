@@ -297,6 +297,132 @@
 		else playbarButton.deregister();
 	}
 
+
+	// MERIOTIFY ADAPTER: native Spotify Shuffle button -> upstream Shuffle+
+	// ---------------------------------------------------------------------
+	// No custom shuffle algorithm here. This only intercepts the native
+	// Spotify shuffle control and forwards the current playlist URI to the
+	// original upstream fetchAndPlay().
+	let meriotifyNativeShuffleBusy = false;
+	const MERIOTIFY_SETTINGS_KEY = "meriotify:settings";
+
+	function meriotifyShufflePlusEnabled() {
+		try {
+			const settings = JSON.parse(localStorage.getItem(MERIOTIFY_SETTINGS_KEY) || "{}");
+			return settings?.shufflePlus?.enabled === true;
+		} catch {
+			return false;
+		}
+	}
+
+	function meriotifyCurrentPlaylistUri() {
+		const raw = String(
+			Spicetify.Player?.data?.context_uri ||
+			Spicetify.Player?.data?.context?.uri ||
+			Spicetify.Platform?.PlayerAPI?.getState?.()?.context?.uri ||
+			""
+		);
+
+		if (raw) {
+			try {
+				const parsed = Spicetify.URI.fromString(raw);
+				if (parsed.type === Type.PLAYLIST || parsed.type === Type.PLAYLIST_V2) {
+					return raw;
+				}
+			} catch {}
+		}
+
+		const pathname = String(Spicetify.Platform?.History?.location?.pathname || "");
+		const match = pathname.match(/^\/playlist\/([A-Za-z0-9]+)(?:\/|$)/);
+		return match ? `spotify:playlist:${match[1]}` : "";
+	}
+
+	function meriotifyNativeShuffleSelector() {
+		return [
+			'.main-shuffleButton-button',
+			'button[data-testid="control-button-shuffle"]',
+			'[data-testid="control-button-shuffle"]',
+			'button[class*="shuffleButton"]'
+		].join(',');
+	}
+
+	function meriotifyFindNativeShuffleButton(event) {
+		const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+
+		for (const node of path) {
+			if (!(node instanceof Element)) continue;
+			const match = node.matches(meriotifyNativeShuffleSelector())
+				? node
+				: node.closest?.(meriotifyNativeShuffleSelector());
+			if (match) return match;
+		}
+
+		if (event.target instanceof Element) {
+			return event.target.matches(meriotifyNativeShuffleSelector())
+				? event.target
+				: event.target.closest?.(meriotifyNativeShuffleSelector());
+		}
+
+		return null;
+	}
+
+	function meriotifyDisableSpotifyNativeShuffle() {
+		try {
+			if (typeof Spicetify.Player?.setShuffle === "function") {
+				Spicetify.Player.setShuffle(false);
+			}
+		} catch {}
+
+		for (const button of document.querySelectorAll(meriotifyNativeShuffleSelector())) {
+			button.classList.remove("main-shuffleButton-active", "main-smartShuffleButton-active");
+			button.setAttribute("aria-pressed", "false");
+		}
+	}
+
+	async function meriotifyRunShufflePlusFromNativeButton() {
+		if (meriotifyNativeShuffleBusy) return;
+
+		const playlistUri = meriotifyCurrentPlaylistUri();
+		if (!playlistUri) {
+			Spicetify.showNotification(
+				"Shuffle+: il tasto funziona solo dentro una playlist.",
+				true
+			);
+			return;
+		}
+
+		meriotifyNativeShuffleBusy = true;
+		try {
+			meriotifyDisableSpotifyNativeShuffle();
+
+			// EXACT upstream Shuffle+ execution path.
+			await fetchAndPlay(playlistUri);
+
+			// Ensure Spotify's own Shuffle/Smart Shuffle state did not get enabled.
+			meriotifyDisableSpotifyNativeShuffle();
+		} finally {
+			meriotifyNativeShuffleBusy = false;
+		}
+	}
+
+	function meriotifyHandleNativeShuffleClick(event) {
+		const button = meriotifyFindNativeShuffleButton(event);
+		if (!button) return;
+
+		// Module OFF: do absolutely nothing. Spotify receives its native click.
+		if (!meriotifyShufflePlusEnabled()) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+		if (typeof event.stopImmediatePropagation === "function") {
+			event.stopImmediatePropagation();
+		}
+
+		void meriotifyRunShufflePlusFromNativeButton();
+	}
+
+	document.addEventListener("click", meriotifyHandleNativeShuffleClick, true);
+
 	async function fetchPlaylistTracks(uri) {
 		const res = await Spicetify.Platform.PlaylistAPI.getContents(`spotify:playlist:${uri}`, {
 			limit: 9999999,

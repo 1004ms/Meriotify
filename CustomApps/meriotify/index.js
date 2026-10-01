@@ -11,15 +11,16 @@ const ASSET_DB = "meriotify-assets";
 const ASSET_STORE = "assets";
 const BACKGROUND_ASSET = "background";
 
-const SETTINGS_VERSION = 12;
+const SETTINGS_VERSION = 16;
 const DEFAULTS = {
 	_schemaVersion: SETTINGS_VERSION,
-	spotifyPlus: { enabled: false, motion: false },
+	spotifyPlus: { enabled: false },
 	adaptiveTheme: { enabled: false, intensity: 65 },
 	background: { enabled: false, type: "", name: "", opacity: 0.78 },
 	sleep: { enabled: false, minutes: 120, graceSeconds: 10 },
 	fade: { enabled: false, seconds: 10 },
 	volumeBoost: { enabled: false, value: 100 },
+	shufflePlus: { enabled: false },
 	keybinds: {
 		enabled: false,
 		playPause: "ctrl+space",
@@ -45,10 +46,31 @@ function readSettings() {
 	try {
 		const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
 		const merged = deepMerge(DEFAULTS, stored);
+		const schemaChanged = stored?._schemaVersion !== SETTINGS_VERSION;
 		merged._schemaVersion = SETTINGS_VERSION;
 		delete merged.fpsGuard;
-		merged.volumeBoost = { enabled: false, value: 100 };
-		if (stored?._schemaVersion !== SETTINGS_VERSION || Object.prototype.hasOwnProperty.call(stored || {}, "fpsGuard")) {
+		if (merged.shufflePlus) delete merged.shufflePlus.repeatPlaylist;
+		if (merged.spotifyPlus) {
+			delete merged.spotifyPlus.motion;
+			delete merged.spotifyPlus.artworkLink;
+			delete merged.spotifyPlus.artworkIntensity;
+		}
+
+		// Meriotify 1.3 baseline: every optional module starts OFF on schema migration.
+		if (schemaChanged) {
+			merged.spotifyPlus.enabled = false;
+			merged.adaptiveTheme.enabled = false;
+			merged.background.enabled = false;
+			merged.sleep.enabled = false;
+			merged.fade.enabled = false;
+			merged.volumeBoost = { enabled: false, value: 100 };
+			merged.shufflePlus.enabled = false;
+			merged.keybinds.enabled = false;
+		} else {
+			merged.volumeBoost = { enabled: false, value: 100 };
+		}
+
+		if (schemaChanged || Object.prototype.hasOwnProperty.call(stored || {}, "fpsGuard") || stored?.shufflePlus?.repeatPlaylist !== undefined) {
 			localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged));
 		}
 		return merged;
@@ -349,23 +371,33 @@ function App() {
 			React.createElement(Card, {
 				title: "Spotify+",
 				description: T(
-					"Ridisegna l'interfaccia di Spotify: sidebar a dock, top bar compatta, card e liste rifatte, player flottante, Now Playing ripulito, scrollbar, spaziature, bordi e superfici più coerenti. Non sostituisce le pagine o i controlli di Spotify: cambia come vengono mostrati.",
-					"Redesigns Spotify's interface: dock-style sidebars, a compact top bar, reworked cards and lists, a floating player, cleaner Now Playing, plus redesigned scrollbars, spacing, borders and surfaces. It keeps Spotify's pages and controls and changes how they are presented."
+					"Un solo interruttore: tutta l'esperienza premium insieme, ma ottimizzata. Gli effetti grossi non animano più in loop quando Spotify è fermo: partono solo quando servono.",
+					"One switch enables the entire premium Meriotify experience. Dynamic artwork, track-derived colors, cinematic heroes, immersive Now Playing and advanced motion are always included."
 				),
 				enabled: settings.spotifyPlus.enabled,
 			},
-				React.createElement(Row, { label: T("Spotify+", "Spotify+") }, React.createElement(Toggle, { checked: settings.spotifyPlus.enabled, onChange: (v) => update(["spotifyPlus", "enabled"], v) })),
 				React.createElement(Row, {
-					label: T("Hover & motion", "Hover & motion"),
-					hint: T("Aggiunge le animazioni di Spotify+: le card si alzano, le cover fanno zoom, righe e voci della sidebar si muovono leggermente e i pulsanti hanno hover e pressione. Se è OFF, queste animazioni non vengono applicate.", "Adds Spotify+ animations: cards lift, artwork zooms, rows and sidebar items move slightly, and buttons get hover and press feedback. When OFF, these animations are not applied.")
-				}, React.createElement(Toggle, { checked: settings.spotifyPlus.motion, onChange: (v) => update(["spotifyPlus", "motion"], v) }))
+					label: "Spotify+",
+					hint: T(
+						"ON = interfaccia completa + cover viva + colori adattivi + animazioni. OFF = Spotify normale e zero effetti Spotify+ in esecuzione.",
+						"ON = full interface + live artwork + adaptive colors + animations. OFF = stock Spotify and zero Spotify+ effects running."
+					)
+				}, React.createElement(Toggle, {
+					checked: settings.spotifyPlus.enabled,
+					onChange: (v) => update(["spotifyPlus", "enabled"], v)
+				})),
+				settings.spotifyPlus.enabled ? React.createElement("div", {
+					className: `meriotify-inline-state ${runtime.adaptiveReady ? "ready" : ""}`
+				}, runtime.adaptiveReady
+					? T("Spotify+ completo · cover, colori e motion attivi", "Full Spotify+ · artwork, colors and motion active")
+					: T("Spotify+ attivo · aspetto la cover corrente", "Spotify+ active · waiting for current artwork")) : null
 			),
 
 			React.createElement(Card, {
 				title: T("Tema dalla cover", "Artwork Theme"),
 				description: T(
-					"Prende i colori dalla cover del brano e li porta nel resto dell'interfaccia. Più alzi l'intensità, più Spotify segue il mood dell'album.",
-					"Pulls colors from the current artwork and spreads them through the interface. Higher intensity makes Spotify follow the album's mood more strongly."
+					"Tema cover standalone quando Spotify+ è spento. Se Spotify+ è acceso, i colori della cover sono già integrati automaticamente.",
+					"Standalone artwork theme for when Spotify+ is off. When Spotify+ is enabled, artwork colors are already integrated automatically."
 				),
 				enabled: settings.adaptiveTheme.enabled,
 			},
@@ -394,6 +426,52 @@ function App() {
 
 		React.createElement(SectionTitle, null, T("Riproduzione", "Playback")),
 		React.createElement("div", { className: "meriotify-grid" },
+
+			React.createElement(Card, {
+				title: "Shuffle+",
+				description: T(
+					"Usa il vero Shuffle+ di Spicetify sul normale tasto Shuffle di Spotify. Nessun pulsante extra: quando è attivo, premi una sola volta Shuffle e Meriotify rimescola davvero la playlist.",
+					"Uses the real Spicetify Shuffle+ engine on Spotify's normal Shuffle button. No extra buttons: when enabled, press Shuffle once and Meriotify truly reshuffles the playlist."
+				),
+				enabled: settings.shufflePlus.enabled,
+				wide: true,
+			},
+				React.createElement(Row, {
+					label: "Shuffle+",
+					hint: T(
+						"OFF = Shuffle Spotify normale · ON = il tasto Shuffle usa Shuffle+",
+						"OFF = normal Spotify Shuffle · ON = the Shuffle button uses Shuffle+"
+					)
+				}, React.createElement(Toggle, {
+					checked: settings.shufflePlus.enabled,
+					onChange: (v) => update(["shufflePlus", "enabled"], v)
+				})),
+
+
+				React.createElement("div", { className: "meriotify-note" },
+					React.createElement("strong", null, T("Prima di usarlo, in Spotify disattiva:", "Before using it, disable these in Spotify:")),
+					React.createElement("br"),
+					React.createElement("span", null, "1. ", React.createElement("strong", null, T("Riproduzione automatica brani simili", "Autoplay"))),
+					React.createElement("br"),
+					React.createElement("span", null, "2. ", React.createElement("strong", null, T("Includi Smart Shuffle nelle modalità di riproduzione", "Include Smart Shuffle in play modes")))
+				),
+
+				React.createElement("div", { className: "meriotify-note" },
+					React.createElement("strong", null, T("Come si usa:", "How to use it:")),
+					React.createElement("br"),
+					React.createElement("span", null, T(
+						"Apri o avvia una playlist e premi UNA SOLA VOLTA il normale tasto Shuffle di Spotify. Vedrai “Shuffled X Songs”. Non c’è più alcun loop automatico della playlist.",
+						"Open or start a playlist and press Spotify's normal Shuffle button ONCE. You will see “Shuffled X Songs”. There is no automatic playlist loop anymore."
+					))
+				),
+
+				React.createElement("div", {
+					className: `meriotify-inline-state ${settings.shufflePlus.enabled ? "ready" : ""}`
+				}, settings.shufflePlus.enabled
+					? T("Shuffle+ attivo · premi Shuffle una volta sulla playlist", "Shuffle+ enabled · press Shuffle once on the playlist")
+					: T("Shuffle+ disattivato · Spotify usa il suo Shuffle normale", "Shuffle+ disabled · Spotify uses its normal Shuffle"))
+			),
+
 			React.createElement(Card, {
 				title: "Sleep Timer",
 				description: T(

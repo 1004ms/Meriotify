@@ -15,6 +15,7 @@ func EnsureMeriotifyFeatures() {
 	changed := false
 	changed = ensureFeatureListValue("custom_apps", "meriotify") || changed
 	changed = ensureFeatureListValue("extensions", "meriotify-core.js") || changed
+	changed = ensureFeatureListValue("extensions", "shuffle+.js") || changed
 	if changed {
 		_ = cfg.Write()
 	}
