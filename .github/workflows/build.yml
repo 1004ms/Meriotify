@@ -9,8 +9,8 @@ on:
     branches:
       - "main"
       - "*/main/*/**"
-  release:
-    types: [published]
+    tags:
+      - "v*"
 
 env:
   UPSTREAM_COMPAT_VERSION: "2.45.1"
