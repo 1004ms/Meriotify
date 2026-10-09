@@ -294,6 +294,10 @@ func (b *hotkeyBridge) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 func (b *hotkeyBridge) handleNext(w http.ResponseWriter, r *http.Request) {
 	setBridgeHeaders(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -330,7 +334,7 @@ func (b *hotkeyBridge) handleNext(w http.ResponseWriter, r *http.Request) {
 		b.touchClient(client)
 		writeBridgeJSON(w, map[string]any{"ready": true})
 	case <-r.Context().Done():
-		b.removeClient(client)
+		return
 	}
 }
 
@@ -353,6 +357,7 @@ func setBridgeHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Private-Network", "true")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 }

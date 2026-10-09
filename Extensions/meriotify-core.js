@@ -278,9 +278,6 @@
 
 	async function bridgeGet(path) {
 		const url = `${GLOBAL_HOTKEY_BRIDGE}${path}`;
-		if (Spicetify.CosmosAsync?.get) {
-			return await Spicetify.CosmosAsync.get(url);
-		}
 		const response = await fetch(url, { cache: "no-store" });
 		if (!response.ok) throw new Error(`Global hotkey bridge HTTP ${response.status}`);
 		return await response.json();
@@ -288,9 +285,6 @@
 
 	async function bridgePost(path, body) {
 		const url = `${GLOBAL_HOTKEY_BRIDGE}${path}`;
-		if (Spicetify.CosmosAsync?.post) {
-			return await Spicetify.CosmosAsync.post(url, body);
-		}
 		const response = await fetch(url, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
