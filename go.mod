@@ -1,6 +1,6 @@
 module github.com/1004ms/Meriotify
 
-go 1.23.0
+go 1.25.0
 
 require (
 	github.com/go-ini/ini v1.67.0
