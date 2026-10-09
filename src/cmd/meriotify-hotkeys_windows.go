@@ -34,7 +34,9 @@ func EnsureMeriotifyHotkeyBridge() {
 		}
 	}
 	cancel()
-	time.Sleep(80 * time.Millisecond)
+
+	healthURL := "http://127.0.0.1:19473/health"
+	_ = waitForHotkeyBridgeState(healthURL, false, 2*time.Second)
 
 	escapedExe := strings.ReplaceAll(exe, `'`, `''`)
 	runCommand := fmt.Sprintf(
@@ -59,5 +61,6 @@ func EnsureMeriotifyHotkeyBridge() {
 	}
 	if command.Start() == nil && command.Process != nil {
 		_ = command.Process.Release()
+		_ = waitForHotkeyBridgeState(healthURL, true, 2*time.Second)
 	}
 }

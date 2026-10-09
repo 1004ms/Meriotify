@@ -328,6 +328,7 @@ func main() {
 		case "apply":
 			cmd.CheckStates()
 			cmd.InitSetting()
+			cmd.EnsureMeriotifyHotkeyBridge()
 			cmd.Apply(version)
 			shouldRestart = true
 
@@ -354,6 +355,7 @@ func main() {
 			cmd.SpotifyRestart()
 
 		case "auto":
+			cmd.EnsureMeriotifyHotkeyBridge()
 			cmd.Auto(version, upstreamVersion)
 			shouldRestart = true
 

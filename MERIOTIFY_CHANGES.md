@@ -1,5 +1,13 @@
 # Meriotify changes
 
+## 1.3.2
+
+- Fixed custom media hotkeys on Windows so they keep working while Spotify is in the background, including while playing fullscreen games such as Minecraft.
+- The native hotkey bridge now tolerates Chromium background throttling instead of unregistering shortcuts after a few seconds.
+- Buffered a small number of hotkey actions across short polling gaps so key presses are not silently dropped.
+- Fixed a bridge restart race that could leave the global hotkey service stopped after setup/update.
+- `apply` and `auto` now ensure the Windows global-hotkey bridge is running instead of relying only on the initial setup.
+
 ## 1.1.5
 
 - Fixed `meriotify update` failing with a temporary GitHub 404 while a new release is still uploading its assets.

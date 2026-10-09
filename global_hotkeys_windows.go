@@ -66,6 +66,7 @@ type hotkeyBridge struct {
 	config   bridgeConfig
 	clients  map[string]time.Time
 	waiters  map[string]chan string
+	pending  map[string][]string
 	threadID uint32
 	server   *http.Server
 }
@@ -84,6 +85,7 @@ func newHotkeyBridge() *hotkeyBridge {
 		config:  bridgeConfig{Keybinds: map[string]string{}},
 		clients: map[string]time.Time{},
 		waiters: map[string]chan string{},
+		pending: map[string][]string{},
 	}
 }
 
@@ -106,12 +108,25 @@ func (b *hotkeyBridge) setConfig(config bridgeConfig) {
 	b.wake(wmAppConfig)
 }
 
-func (b *hotkeyBridge) addClient(id string, waiter chan string) {
+func (b *hotkeyBridge) addClient(id string, waiter chan string) (string, bool) {
 	b.mu.Lock()
+	_, existed := b.clients[id]
 	b.clients[id] = time.Now()
-	b.waiters[id] = waiter
+
+	var pendingAction string
+	if queued := b.pending[id]; len(queued) > 0 {
+		pendingAction = queued[0]
+		if len(queued) == 1 {
+			delete(b.pending, id)
+		} else {
+			b.pending[id] = queued[1:]
+		}
+	} else {
+		b.waiters[id] = waiter
+	}
 	b.mu.Unlock()
 	b.wake(wmAppConfig)
+	return pendingAction, !existed
 }
 
 func (b *hotkeyBridge) touchClient(id string) {
@@ -130,19 +145,21 @@ func (b *hotkeyBridge) removeClient(id string) {
 	b.mu.Lock()
 	delete(b.waiters, id)
 	delete(b.clients, id)
+	delete(b.pending, id)
 	b.mu.Unlock()
 	b.wake(wmAppConfig)
 }
 
 func (b *hotkeyBridge) cleanupClients() {
-	cutoff := time.Now().Add(-14 * time.Second)
+	now := time.Now()
 	changed := false
 
 	b.mu.Lock()
 	for id, seen := range b.clients {
-		if seen.Before(cutoff) {
+		if hotkeyClientExpired(seen, now) {
 			delete(b.clients, id)
 			delete(b.waiters, id)
+			delete(b.pending, id)
 			changed = true
 		}
 	}
@@ -169,17 +186,22 @@ func (b *hotkeyBridge) snapshot() (bridgeConfig, int) {
 
 func (b *hotkeyBridge) broadcast(action string) {
 	b.mu.Lock()
-	waiters := make([]chan string, 0, len(b.waiters))
-	for _, ch := range b.waiters {
-		waiters = append(waiters, ch)
-	}
-	b.mu.Unlock()
+	defer b.mu.Unlock()
 
-	for _, ch := range waiters {
-		select {
-		case ch <- action:
-		default:
+	for id := range b.clients {
+		if ch := b.waiters[id]; ch != nil {
+			select {
+			case ch <- action:
+				continue
+			default:
+			}
 		}
+
+		queue := b.pending[id]
+		if len(queue) >= hotkeyPendingLimit {
+			queue = queue[len(queue)-hotkeyPendingLimit+1:]
+		}
+		b.pending[id] = append(queue, action)
 	}
 }
 
@@ -284,10 +306,20 @@ func (b *hotkeyBridge) handleNext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	waiter := make(chan string, 1)
-	b.addClient(client, waiter)
+	pendingAction, isNewClient := b.addClient(client, waiter)
 	defer b.removeWaiter(client)
 
-	timer := time.NewTimer(8 * time.Second)
+	if pendingAction != "" {
+		b.touchClient(client)
+		writeBridgeJSON(w, map[string]any{"action": pendingAction})
+		return
+	}
+	if isNewClient {
+		writeBridgeJSON(w, map[string]any{"ready": true})
+		return
+	}
+
+	timer := time.NewTimer(hotkeyPollTimeout)
 	defer timer.Stop()
 
 	select {

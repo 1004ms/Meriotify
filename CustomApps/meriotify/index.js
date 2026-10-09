@@ -363,7 +363,7 @@ function App() {
 				React.createElement("h1", { className: "meriotify-title" }, "Meriotify"),
 				React.createElement("p", { className: "meriotify-subtitle" }, T("Impostazioni", "Settings"))
 			),
-			React.createElement("span", { className: "meriotify-core-state" }, "1.3.1")
+			React.createElement("span", { className: "meriotify-core-state" }, "1.3.2")
 		),
 
 		React.createElement(SectionTitle, null, T("Aspetto", "Appearance")),
